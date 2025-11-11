@@ -18,8 +18,8 @@ use tracing::info;
 pub mod types;
 
 use types::{
-    Account, Block, LedgerState, ModelProfile, Node, Provider, Task, TaskSegment, TokenKind,
-    Transaction, TransactionKind,
+    Account, Block, LedgerState, ModelProfile, Node, NodeRevenue, Provider, Task, TaskSegment,
+    TokenKind, Transaction, TransactionKind,
 };
 
 /// Default persistence file name.
@@ -230,7 +230,17 @@ impl Ledger {
                 segment.reward = segment.reward.saturating_sub(treasury_fee);
                 self.state.treasury.aia_balance =
                     self.state.treasury.aia_balance.saturating_add(treasury_fee);
+                let reward_after_fees = segment.reward;
                 task.segments.push(segment);
+                if let Some(node) = self.state.nodes.get_mut(provider_id) {
+                    node.total_segments = node.total_segments.saturating_add(1);
+                    node.total_tokens_processed =
+                        node.total_tokens_processed.saturating_add(*tokens);
+                    node.total_rewards_aia =
+                        node.total_rewards_aia.saturating_add(reward_after_fees);
+                    node.total_latency_ms =
+                        node.total_latency_ms.saturating_add((*latency_ms).into());
+                }
                 if task.segments.len() as u64 * 100_000 >= task.total_tokens {
                     task.completed = true;
                     if let Some(best) = task.segments.iter().min_by_key(|seg| seg.latency_ms) {
@@ -285,6 +295,12 @@ impl Ledger {
 
     /// Registers a node in the ledger.
     pub fn register_node(&mut self, mut node: Node) {
+        if let Some(existing) = self.state.nodes.get(&node.id) {
+            node.total_segments = existing.total_segments;
+            node.total_tokens_processed = existing.total_tokens_processed;
+            node.total_rewards_aia = existing.total_rewards_aia;
+            node.total_latency_ms = existing.total_latency_ms;
+        }
         node.registered_at = Utc::now();
         self.state.nodes.insert(node.id.clone(), node);
     }
@@ -391,6 +407,28 @@ impl Ledger {
             .ok_or_else(|| LedgerError::NodeNotFound(node_id.to_string()))?;
         node.online = online;
         Ok(())
+    }
+
+    /// Returns aggregate revenue statistics for a node.
+    pub fn node_revenue(&self, node_id: &str) -> Result<NodeRevenue, LedgerError> {
+        let node = self
+            .state
+            .nodes
+            .get(node_id)
+            .ok_or_else(|| LedgerError::NodeNotFound(node_id.to_string()))?;
+        let average_latency_ms = if node.total_segments > 0 {
+            Some(node.total_latency_ms as f64 / node.total_segments as f64)
+        } else {
+            None
+        };
+        Ok(NodeRevenue {
+            node_id: node.id.clone(),
+            owner: node.owner.clone(),
+            total_segments: node.total_segments,
+            total_tokens_processed: node.total_tokens_processed,
+            total_rewards_aia: node.total_rewards_aia,
+            average_latency_ms,
+        })
     }
 }
 

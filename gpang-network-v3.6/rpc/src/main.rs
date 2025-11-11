@@ -1,8 +1,12 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::State, http::StatusCode, response::IntoResponse, routing::get, routing::post, Json,
-    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    routing::post,
+    Json, Router,
 };
 use chrono::Utc;
 use ledger::{types::*, Ledger, NetworkSummary, DEFAULT_LEDGER_FILE};
@@ -46,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/provider/heartbeat", post(provider_heartbeat))
         .route("/node/register", post(register_node))
         .route("/node/status", post(update_node_status))
+        .route("/node/:node_id/revenue", get(get_node_revenue))
         .route("/task/submit", post(submit_task))
         .with_state(state.clone());
 
@@ -145,6 +150,21 @@ async fn list_providers(State(state): State<AppState>) -> Json<Vec<Provider>> {
 async fn list_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
     let ledger = state.ledger.lock().await;
     Json(ledger.state.nodes.values().cloned().collect())
+}
+
+async fn get_node_revenue(
+    State(state): State<AppState>,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    match ledger.node_revenue(&node_id) {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {
@@ -298,6 +318,10 @@ async fn register_node(
         online: true,
         reputation: 0,
         registered_at: Utc::now(),
+        total_segments: 0,
+        total_tokens_processed: 0,
+        total_rewards_aia: 0,
+        total_latency_ms: 0,
     };
     ledger.register_node(node.clone());
     if let Err(err) = ledger.persist() {

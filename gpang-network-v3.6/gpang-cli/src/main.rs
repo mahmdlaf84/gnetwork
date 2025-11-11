@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
-use ledger::types::{ModelProfile, TokenKind, TransactionKind};
+use ledger::types::{ModelProfile, NodeRevenue, TokenKind, TransactionKind};
 use reqwest::Client;
 use serde_json::Value;
 use std::str::FromStr;
@@ -90,6 +90,8 @@ enum NodeCommand {
     Register(RegisterNodeArgs),
     /// Toggle node online/offline
     Status(UpdateNodeStatusArgs),
+    /// Display revenue metrics for a node
+    Revenue(NodeRevenueArgs),
 }
 
 #[derive(Args)]
@@ -113,6 +115,12 @@ struct UpdateNodeStatusArgs {
     node_id: String,
     #[arg(long)]
     online: bool,
+}
+
+#[derive(Args)]
+struct NodeRevenueArgs {
+    #[arg(long)]
+    node_id: String,
 }
 
 #[derive(Subcommand)]
@@ -274,6 +282,42 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
                 .await?
                 .error_for_status()?;
             println!("{}", "Node status updated".green());
+        }
+        NodeCommand::Revenue(args) => {
+            let res = client
+                .get(format!("{}/node/{}/revenue", rpc, args.node_id))
+                .send()
+                .await?;
+            if res.status().is_success() {
+                let summary: NodeRevenue = res.json().await?;
+                println!("{}", "Node Revenue".bright_blue().bold());
+                println!("  {} {}", "Node:".cyan(), summary.node_id);
+                println!("  {} {}", "Owner:".cyan(), summary.owner);
+                println!("  {} {}", "Segments:".cyan(), summary.total_segments);
+                println!(
+                    "  {} {}",
+                    "Tokens Processed:".cyan(),
+                    summary.total_tokens_processed
+                );
+                println!(
+                    "  {} {}",
+                    "Rewards (AIA):".cyan(),
+                    summary.total_rewards_aia
+                );
+                let latency_display = summary
+                    .average_latency_ms
+                    .map(|v| format!("{:.2} ms", v))
+                    .unwrap_or_else(|| "n/a".into());
+                println!("  {} {}", "Avg Latency:".cyan(), latency_display);
+            } else {
+                let body: Value = res.json().await.unwrap_or_else(|_| serde_json::json!({}));
+                return Err(anyhow!(
+                    "failed to fetch node revenue: {}",
+                    body.get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error")
+                ));
+            }
         }
     }
     Ok(())

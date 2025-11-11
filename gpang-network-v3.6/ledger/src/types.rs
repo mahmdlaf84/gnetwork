@@ -155,6 +155,26 @@ pub struct Node {
     pub online: bool,
     pub reputation: u64,
     pub registered_at: DateTime<Utc>,
+    #[serde(default)]
+    pub total_segments: u64,
+    #[serde(default)]
+    pub total_tokens_processed: u64,
+    #[serde(default)]
+    pub total_rewards_aia: u64,
+    #[serde(default)]
+    pub total_latency_ms: u128,
+}
+
+/// Aggregated revenue statistics for a node.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeRevenue {
+    pub node_id: String,
+    pub owner: String,
+    pub total_segments: u64,
+    pub total_tokens_processed: u64,
+    pub total_rewards_aia: u64,
+    #[serde(default)]
+    pub average_latency_ms: Option<f64>,
 }
 
 /// Captures the outcome of a FlashRace segment.
