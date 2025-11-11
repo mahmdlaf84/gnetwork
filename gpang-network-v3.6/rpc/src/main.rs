@@ -386,20 +386,37 @@ struct SubmitTaskRequest {
     target_profile: ModelProfile,
     providers: Vec<String>,
     preferred_region: Option<String>,
+    #[serde(default)]
+    mode: Option<TaskMode>,
+    #[serde(default)]
+    chat_prompt: Option<String>,
 }
 
 async fn submit_task(
     State(state): State<AppState>,
     Json(payload): Json<SubmitTaskRequest>,
 ) -> impl IntoResponse {
+    let SubmitTaskRequest {
+        owner,
+        content_hash,
+        total_tokens,
+        target_profile,
+        providers,
+        preferred_region,
+        mode,
+        chat_prompt,
+    } = payload;
+    let mode = mode.unwrap_or(TaskMode::Batch);
     let mut ledger = state.ledger.lock().await;
     let task_id = ledger.submit_task(
-        payload.owner,
-        payload.content_hash,
-        payload.total_tokens,
-        payload.target_profile,
-        payload.providers,
-        payload.preferred_region,
+        owner,
+        content_hash,
+        total_tokens,
+        target_profile,
+        providers,
+        preferred_region,
+        mode,
+        chat_prompt,
     );
     let scheduled = ledger
         .state
@@ -424,26 +441,49 @@ struct TaskProofRequest {
     tokens_processed: u64,
     region: String,
     signature: String,
+    #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
+    output_digest: Option<String>,
+    #[serde(default)]
+    chat_response: Option<String>,
 }
 
 async fn submit_task_proof(
     State(state): State<AppState>,
     Json(payload): Json<TaskProofRequest>,
 ) -> impl IntoResponse {
+    let TaskProofRequest {
+        round,
+        task_id,
+        segment_id,
+        provider_id,
+        latency_ms,
+        throughput_tok_s,
+        tokens_processed,
+        region,
+        signature,
+        node_id,
+        output_digest,
+        chat_response,
+    } = payload;
     let tx = Transaction {
         id: new_transaction_id("task-proof"),
         timestamp: current_timestamp(),
         kind: TransactionKind::TaskProofCommit {
             proof: TaskProof {
-                round: payload.round,
-                task_id: payload.task_id,
-                segment_id: payload.segment_id,
-                provider_id: payload.provider_id,
-                latency_ms: payload.latency_ms,
-                throughput_tok_s: payload.throughput_tok_s,
-                tokens_processed: payload.tokens_processed,
-                region: payload.region,
-                signature: payload.signature,
+                round,
+                task_id,
+                segment_id,
+                provider_id,
+                latency_ms,
+                throughput_tok_s,
+                tokens_processed,
+                region,
+                signature,
+                node_id,
+                output_digest,
+                chat_response,
             },
         },
     };

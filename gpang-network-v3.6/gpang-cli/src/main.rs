@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
-use ledger::types::{ModelProfile, NodeHardware, NodeMetrics, TokenKind, TransactionKind};
+use ledger::types::{
+    ModelProfile, NodeHardware, NodeMetrics, TaskMode, TokenKind, TransactionKind,
+};
 use reqwest::Client;
 use serde_json::Value;
 use std::{
@@ -147,6 +149,12 @@ struct SubmitTaskArgs {
     /// Optional region preference to bias scheduling
     #[arg(long)]
     preferred_region: Option<String>,
+    /// Task execution mode (batch or chat)
+    #[arg(long, default_value = "batch")]
+    mode: String,
+    /// Prompt content when submitting chat mode tasks
+    #[arg(long)]
+    chat_prompt: Option<String>,
 }
 
 #[derive(Args)]
@@ -169,6 +177,12 @@ struct TaskProofArgs {
     region: String,
     #[arg(long)]
     signature: String,
+    #[arg(long)]
+    node_id: Option<String>,
+    #[arg(long)]
+    output_digest: Option<String>,
+    #[arg(long)]
+    chat_response: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -637,17 +651,37 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
 async fn handle_task(client: &Client, rpc: &str, cmd: TaskCommand) -> Result<()> {
     match cmd {
         TaskCommand::Submit(args) => {
-            let target_profile: ModelProfile = serde_json::from_str(&args.target_profile)
-                .context("invalid target profile JSON")?;
+            let SubmitTaskArgs {
+                owner,
+                content_hash,
+                total_tokens,
+                target_profile,
+                providers,
+                preferred_region,
+                mode,
+                chat_prompt,
+            } = args;
+            let target_profile: ModelProfile =
+                serde_json::from_str(&target_profile).context("invalid target profile JSON")?;
             let providers: Vec<String> =
-                serde_json::from_str(&args.providers).context("invalid providers JSON")?;
+                serde_json::from_str(&providers).context("invalid providers JSON")?;
+            let task_mode = parse_task_mode(&mode)?;
+            if matches!(task_mode, TaskMode::Chat) && chat_prompt.is_none() {
+                return Err(anyhow!("chat mode requires --chat-prompt"));
+            }
+            let mode_value = match task_mode {
+                TaskMode::Batch => "batch",
+                TaskMode::Chat => "chat",
+            };
             let body = serde_json::json!({
-                "owner": args.owner,
-                "content_hash": args.content_hash,
-                "total_tokens": args.total_tokens,
+                "owner": owner,
+                "content_hash": content_hash,
+                "total_tokens": total_tokens,
                 "target_profile": target_profile,
                 "providers": providers,
-                "preferred_region": args.preferred_region,
+                "preferred_region": preferred_region,
+                "mode": mode_value,
+                "chat_prompt": chat_prompt,
             });
             let res = client
                 .post(format!("{}/task/submit", rpc))
@@ -659,16 +693,33 @@ async fn handle_task(client: &Client, rpc: &str, cmd: TaskCommand) -> Result<()>
             println!("{}", res.text().await?);
         }
         TaskCommand::Proof(args) => {
+            let TaskProofArgs {
+                round,
+                task_id,
+                segment_id,
+                provider_id,
+                latency_ms,
+                throughput_tok_s,
+                tokens_processed,
+                region,
+                signature,
+                node_id,
+                output_digest,
+                chat_response,
+            } = args;
             let body = serde_json::json!({
-                "round": args.round,
-                "task_id": args.task_id,
-                "segment_id": args.segment_id,
-                "provider_id": args.provider_id,
-                "latency_ms": args.latency_ms,
-                "throughput_tok_s": args.throughput_tok_s,
-                "tokens_processed": args.tokens_processed,
-                "region": args.region,
-                "signature": args.signature,
+                "round": round,
+                "task_id": task_id,
+                "segment_id": segment_id,
+                "provider_id": provider_id,
+                "latency_ms": latency_ms,
+                "throughput_tok_s": throughput_tok_s,
+                "tokens_processed": tokens_processed,
+                "region": region,
+                "signature": signature,
+                "node_id": node_id,
+                "output_digest": output_digest,
+                "chat_response": chat_response,
             });
             let res = client
                 .post(format!("{}/consensus/task-proof", rpc))
@@ -749,6 +800,14 @@ async fn send_transaction(client: &Client, rpc: &str, kind: TransactionKind) -> 
     println!("{}", "Transaction submitted".green());
     println!("{}", res.text().await?);
     Ok(())
+}
+
+fn parse_task_mode(mode: &str) -> Result<TaskMode> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "batch" | "throughput" => Ok(TaskMode::Batch),
+        "chat" | "conversation" => Ok(TaskMode::Chat),
+        other => Err(anyhow!("unsupported task mode '{}'", other)),
+    }
 }
 
 fn parse_token(token: &str) -> Result<TokenKind> {

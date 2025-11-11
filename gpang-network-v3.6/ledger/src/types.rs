@@ -59,6 +59,12 @@ pub enum TransactionKind {
         latency_ms: u64,
         reward: u64,
     },
+    /// Records the aggregated output of a multi-node chat task.
+    ChatResult {
+        task_id: String,
+        aggregate: String,
+        contributors: Vec<String>,
+    },
     /// Records the result of a task-proof commitment used for consensus.
     TaskProofCommit {
         proof: TaskProof,
@@ -208,8 +214,37 @@ pub struct TaskSegment {
     pub submitted_at: u64,
 }
 
+/// Supported execution modes for tasks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskMode {
+    /// Traditional throughput-oriented inference request.
+    Batch,
+    /// Conversational request that benefits from multi-node aggregation.
+    Chat,
+}
+
+impl Default for TaskMode {
+    fn default() -> Self {
+        TaskMode::Batch
+    }
+}
+
+/// A node's chat response captured for aggregation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatResponse {
+    pub provider_id: String,
+    pub node_id: Option<String>,
+    pub segment_id: String,
+    pub latency_ms: u64,
+    pub tokens: u64,
+    pub response_fragment: String,
+    pub submitted_at: u64,
+}
+
 /// Task lifecycle state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Task {
     pub id: String,
     pub owner: String,
@@ -224,6 +259,14 @@ pub struct Task {
     pub preferred_region: Option<String>,
     /// Providers recommended by the adaptive scheduler.
     pub scheduled: Vec<ScheduledProvider>,
+    /// Execution mode requested by the submitter.
+    pub mode: TaskMode,
+    /// Optional chat prompt when `mode` is chat.
+    pub chat_prompt: Option<String>,
+    /// Individual chat responses collected from nodes.
+    pub chat_responses: Vec<ChatResponse>,
+    /// Aggregated and optimized chat output.
+    pub chat_aggregate: Option<String>,
 }
 
 /// Scheduler output for a provider.
@@ -272,6 +315,7 @@ impl Treasury {
 
 /// Proof emitted by providers to participate in task-proof consensus.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TaskProof {
     pub round: u64,
     pub task_id: String,
@@ -282,6 +326,9 @@ pub struct TaskProof {
     pub tokens_processed: u64,
     pub region: String,
     pub signature: String,
+    pub node_id: Option<String>,
+    pub output_digest: Option<String>,
+    pub chat_response: Option<String>,
 }
 
 /// Aggregate metrics for measuring network scalability targets.

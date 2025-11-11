@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
@@ -20,8 +20,9 @@ use tracing::info;
 pub mod types;
 
 use types::{
-    Account, Block, LedgerState, ModelProfile, Node, NodeHardware, NodeMetrics, Provider,
-    ScheduledProvider, Task, TaskProof, TaskSegment, TokenKind, Transaction, TransactionKind,
+    Account, Block, ChatResponse, LedgerState, ModelProfile, Node, NodeHardware, NodeMetrics,
+    Provider, ScheduledProvider, Task, TaskMode, TaskProof, TaskSegment, TokenKind, Transaction,
+    TransactionKind,
 };
 
 /// Returns the current Unix timestamp in milliseconds.
@@ -303,6 +304,22 @@ impl Ledger {
                     }
                 }
             }
+            TransactionKind::ChatResult {
+                task_id,
+                aggregate,
+                contributors,
+            } => {
+                let task = self
+                    .state
+                    .tasks
+                    .get_mut(task_id)
+                    .ok_or_else(|| LedgerError::TaskNotFound(task_id.clone()))?;
+                task.chat_aggregate = Some(aggregate.clone());
+                task.completed = true;
+                if task.winning_provider.is_none() {
+                    task.winning_provider = contributors.first().cloned();
+                }
+            }
             TransactionKind::TaskProofCommit { proof } => {
                 self.record_task_proof(proof.clone())?;
             }
@@ -403,6 +420,8 @@ impl Ledger {
         target_profile: ModelProfile,
         providers: Vec<String>,
         preferred_region: Option<String>,
+        mode: TaskMode,
+        chat_prompt: Option<String>,
     ) -> String {
         let id = format!("task-{}", self.state.next_task_id);
         self.state.next_task_id += 1;
@@ -419,6 +438,10 @@ impl Ledger {
             winning_provider: None,
             preferred_region,
             scheduled: Vec::new(),
+            mode,
+            chat_prompt,
+            chat_responses: Vec::new(),
+            chat_aggregate: None,
         };
         task.scheduled = self.compute_scheduled_providers(&task);
         self.state.tasks.insert(id.clone(), task);
@@ -566,6 +589,118 @@ impl Ledger {
         decisions
     }
 
+    fn truncate_chat_snippet(text: &str) -> String {
+        let trimmed = text.trim();
+        const MAX: usize = 240;
+        if trimmed.len() <= MAX {
+            return trimmed.to_string();
+        }
+        let mut snippet = trimmed.chars().take(MAX).collect::<String>();
+        snippet.push('…');
+        snippet
+    }
+
+    fn aggregate_chat_responses(responses: &[ChatResponse]) -> String {
+        if responses.is_empty() {
+            return String::new();
+        }
+        let mut sorted = responses.to_vec();
+        sorted.sort_by_key(|resp| resp.latency_ms);
+        let highlights: Vec<String> = sorted
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(idx, resp)| {
+                format!(
+                    "{}. [{} ms | {} tok | {}] {}",
+                    idx + 1,
+                    resp.latency_ms,
+                    resp.tokens,
+                    resp.provider_id,
+                    Self::truncate_chat_snippet(&resp.response_fragment)
+                )
+            })
+            .collect();
+        let unique_providers: HashSet<&str> = responses
+            .iter()
+            .map(|resp| resp.provider_id.as_str())
+            .collect();
+        let mut summary = format!(
+            "Aggregated {} chat response{} from {} provider{}.",
+            responses.len(),
+            if responses.len() == 1 { "" } else { "s" },
+            unique_providers.len(),
+            if unique_providers.len() == 1 { "" } else { "s" }
+        );
+        if !highlights.is_empty() {
+            summary.push('\n');
+            summary.push_str(&highlights.join("\n"));
+        }
+        summary
+    }
+
+    fn integrate_chat_results(
+        &mut self,
+        task_id: &str,
+        proofs: &[TaskProof],
+    ) -> Option<Transaction> {
+        let task = self.state.tasks.get_mut(task_id)?;
+        if task.mode != TaskMode::Chat {
+            return None;
+        }
+        let mut existing_segments: HashSet<String> = HashSet::new();
+        for response in &task.chat_responses {
+            existing_segments.insert(response.segment_id.clone());
+        }
+        let mut new_entries: Vec<ChatResponse> = Vec::new();
+        for proof in proofs {
+            let response_text = match proof.chat_response.as_ref() {
+                Some(text) if !text.trim().is_empty() => text.trim().to_string(),
+                _ => continue,
+            };
+            if existing_segments.contains(&proof.segment_id) {
+                continue;
+            }
+            existing_segments.insert(proof.segment_id.clone());
+            new_entries.push(ChatResponse {
+                provider_id: proof.provider_id.clone(),
+                node_id: proof.node_id.clone(),
+                segment_id: proof.segment_id.clone(),
+                latency_ms: proof.latency_ms,
+                tokens: proof.tokens_processed,
+                response_fragment: response_text,
+                submitted_at: 0,
+            });
+        }
+        if new_entries.is_empty() {
+            return None;
+        }
+        let timestamp = current_timestamp();
+        for mut entry in new_entries {
+            entry.submitted_at = timestamp;
+            task.chat_responses.push(entry);
+        }
+        let aggregate = Self::aggregate_chat_responses(&task.chat_responses);
+        task.chat_aggregate = Some(aggregate.clone());
+        task.completed = true;
+        let mut contributors = task
+            .chat_responses
+            .iter()
+            .map(|resp| resp.provider_id.clone())
+            .collect::<Vec<_>>();
+        contributors.sort();
+        contributors.dedup();
+        Some(Transaction {
+            id: format!("chat-result-{}-{}", task_id, timestamp),
+            timestamp,
+            kind: TransactionKind::ChatResult {
+                task_id: task_id.to_string(),
+                aggregate,
+                contributors,
+            },
+        })
+    }
+
     fn record_task_proof(&mut self, proof: TaskProof) -> Result<(), LedgerError> {
         if !self.state.tasks.contains_key(&proof.task_id) {
             return Err(LedgerError::TaskNotFound(proof.task_id.clone()));
@@ -641,6 +776,9 @@ impl Ledger {
         for (task_id, mut proofs) in grouped {
             if proofs.is_empty() {
                 continue;
+            }
+            if let Some(chat_result) = self.integrate_chat_results(&task_id, &proofs) {
+                outputs.push(chat_result);
             }
             proofs.sort_by_key(|proof| proof.latency_ms);
             if let Some(best) = proofs.first() {

@@ -93,6 +93,16 @@ cargo run -p gpang-cli -- task submit \
   --providers '["prov-fast","prov-us","prov-eu"]' \
   --preferred-region AP-SEA
 
+# Submit a chat-oriented task that aggregates answers from multiple nodes
+cargo run -p gpang-cli -- task submit \
+  --owner alice \
+  --content-hash chat-001 \
+  --total-tokens 120000 \
+  --target-profile '{"model_id":"qwen2.5-7b","quant":"int4","max_ctx":8192,"vram_req_gb":12,"throughput_tok_s":220000}' \
+  --providers '["prov-fast","prov-us","prov-eu"]' \
+  --mode chat \
+  --chat-prompt "Summarize the latest GPU architecture breakthroughs across vendors"
+
 # Submit a task-proof commitment to advance consensus
 cargo run -p gpang-cli -- task proof \
   --round 1 \
@@ -103,10 +113,14 @@ cargo run -p gpang-cli -- task proof \
   --throughput-tok-s 250000 \
   --tokens-processed 100000 \
   --region AP-SEA \
-  --signature demo-proof
+  --signature demo-proof \
+  --node-id node-1 \
+  --chat-response "NVIDIA and AMD both expanded HBM3e roadmaps; Apple doubled unified memory bandwidth"
 ```
 
 When registering or updating a node, the CLI auto-discovers CPU, GPU (covering NVIDIA, AMD, and Apple silicon), memory, disk, and network telemetry from the host. A deterministic fingerprint is derived from this hardware snapshot so the ledger can mint a unique on-chain identity per machine while streaming utilization metrics to the explorer dashboard in real time.
+
+Chat-mode tasks fan out to the top scheduled providers, capture their conversational responses, and persist a consolidated summary on-chain. The explorer highlights the aggregate along with contributor counts so operators can audit how the merged answer was produced.
 
 Mint tokens and stake:
 
@@ -134,8 +148,8 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 - `POST /provider/heartbeat` — Refresh provider heartbeat
 - `POST /node/register` — Register node metadata
 - `POST /node/status` — Update node online state
-- `POST /task/submit` — Submit a new inference task (returns scheduler hints)
-- `POST /consensus/task-proof` — Publish a task-proof commitment used for block production
+- `POST /task/submit` — Submit a new inference task (supports `mode` = `batch` or `chat` plus optional `chat_prompt`, returns scheduler hints)
+- `POST /consensus/task-proof` — Publish a task-proof commitment used for block production (accepts optional `node_id`, `output_digest`, and `chat_response` fields)
 
 ## Consensus Loop
 

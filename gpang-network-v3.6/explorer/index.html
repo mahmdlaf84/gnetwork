@@ -76,8 +76,11 @@
             <tr>
               <th class="px-4 py-2 text-left">ID</th>
               <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Mode</th>
               <th class="px-4 py-2 text-left">Tokens</th>
               <th class="px-4 py-2 text-left">Segments</th>
+              <th class="px-4 py-2 text-left">Chat Responses</th>
+              <th class="px-4 py-2 text-left">Chat Summary</th>
               <th class="px-4 py-2 text-left">Winner</th>
               <th class="px-4 py-2 text-left">Completed</th>
               <th class="px-4 py-2 text-left">Preferred Region</th>
@@ -102,6 +105,13 @@
       const url = `${RPC}${path}`;
       const res = await axios.get(url);
       return res.data;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
     }
 
     function renderSummary(summary) {
@@ -227,30 +237,41 @@
 
     function renderTasks(tasks) {
       const rows = tasks
-        .map(
-          (task) => `
+        .map((task) => {
+          const mode = (task.mode || 'batch').toString();
+          const modeLabel = mode.toUpperCase();
+          const chatResponses = Array.isArray(task.chat_responses)
+            ? task.chat_responses.length
+            : 0;
+          const chatSummary = task.chat_aggregate
+            ? escapeHtml(task.chat_aggregate).replace(/\n/g, '<br/>')
+            : '-';
+          const scheduled =
+            task.scheduled && task.scheduled.length
+              ? task.scheduled
+                  .slice(0, 3)
+                  .map(
+                    (entry) =>
+                      `${entry.provider_id} (${entry.score.toFixed(2)} / ${entry.max_tokens_per_sec.toLocaleString()} tps)`
+                  )
+                  .join('<br/>')
+              : '-';
+          return `
             <tr class="border-b border-gray-700">
               <td class="px-4 py-2">${task.id}</td>
               <td class="px-4 py-2">${task.owner}</td>
+              <td class="px-4 py-2">${modeLabel}</td>
               <td class="px-4 py-2">${task.total_tokens}</td>
               <td class="px-4 py-2">${task.segments.length}</td>
+              <td class="px-4 py-2">${chatResponses}</td>
+              <td class="px-4 py-2 text-sm leading-5">${chatSummary}</td>
               <td class="px-4 py-2">${task.winning_provider || '-'}</td>
               <td class="px-4 py-2">${task.completed ? 'Yes' : 'No'}</td>
               <td class="px-4 py-2">${task.preferred_region || '-'}</td>
-              <td class="px-4 py-2 text-sm">${
-                task.scheduled && task.scheduled.length
-                  ? task.scheduled
-                      .slice(0, 3)
-                      .map(
-                        (entry) =>
-                          `${entry.provider_id} (${entry.score.toFixed(2)} / ${entry.max_tokens_per_sec.toLocaleString()} tps)`
-                      )
-                      .join('<br/>')
-                  : '-'
-              }</td>
+              <td class="px-4 py-2 text-sm">${scheduled}</td>
             </tr>
-          `
-        )
+          `;
+        })
         .join('');
       document.getElementById('tasks').innerHTML = rows;
     }
