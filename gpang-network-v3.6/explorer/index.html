@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GPANG Network Explorer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/axios@1.6.7/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100">
+  <div class="container mx-auto px-4 py-8">
+    <h1 class="text-4xl font-bold mb-6">GPANG Network Explorer</h1>
+    <div id="summary" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8"></div>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Recent Blocks</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Height</th>
+              <th class="px-4 py-2 text-left">Timestamp</th>
+              <th class="px-4 py-2 text-left">Transactions</th>
+            </tr>
+          </thead>
+          <tbody id="blocks"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Providers</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Region</th>
+              <th class="px-4 py-2 text-left">GPU</th>
+              <th class="px-4 py-2 text-left">Current Price</th>
+              <th class="px-4 py-2 text-left">Throughput</th>
+              <th class="px-4 py-2 text-left">Reputation</th>
+            </tr>
+          </thead>
+          <tbody id="providers"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Nodes</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">GPU</th>
+              <th class="px-4 py-2 text-left">Region</th>
+              <th class="px-4 py-2 text-left">Throughput</th>
+              <th class="px-4 py-2 text-left">Online</th>
+            </tr>
+          </thead>
+          <tbody id="nodes"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Tasks</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Tokens</th>
+              <th class="px-4 py-2 text-left">Segments</th>
+              <th class="px-4 py-2 text-left">Winner</th>
+              <th class="px-4 py-2 text-left">Completed</th>
+            </tr>
+          </thead>
+          <tbody id="tasks"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Treasury</h2>
+      <div id="treasury" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    </section>
+  </div>
+
+  <script>
+    const RPC = localStorage.getItem('gpang_rpc') || 'http://127.0.0.1:8080';
+
+    async function fetchJson(path) {
+      const url = `${RPC}${path}`;
+      const res = await axios.get(url);
+      return res.data;
+    }
+
+    function renderSummary(summary) {
+      const cards = [
+        { label: 'Block Height', value: summary.block_height },
+        { label: 'Treasury AIA', value: summary.treasury_aia },
+        { label: 'Active Providers', value: summary.active_providers },
+        { label: 'Active Nodes', value: summary.active_nodes },
+      ];
+      document.getElementById('summary').innerHTML = cards
+        .map(
+          (card) => `
+            <div class="bg-gray-800 p-4 rounded shadow">
+              <div class="text-sm uppercase text-gray-400">${card.label}</div>
+              <div class="text-2xl font-bold">${card.value}</div>
+            </div>
+          `
+        )
+        .join('');
+    }
+
+    function renderBlocks(blocks) {
+      const rows = blocks
+        .slice(-10)
+        .reverse()
+        .map(
+          (block) => `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${block.height}</td>
+              <td class="px-4 py-2">${new Date(block.timestamp).toLocaleString()}</td>
+              <td class="px-4 py-2">${block.transactions.length}</td>
+            </tr>
+          `
+        )
+        .join('');
+      document.getElementById('blocks').innerHTML = rows;
+    }
+
+    function renderProviders(providers) {
+      const rows = providers
+        .map(
+          (provider) => {
+            const profile = provider.model_profiles[0];
+            return `
+              <tr class="border-b border-gray-700">
+                <td class="px-4 py-2">${provider.id}</td>
+                <td class="px-4 py-2">${provider.region}</td>
+                <td class="px-4 py-2">${provider.gpu_model}</td>
+                <td class="px-4 py-2">${provider.pricing.current_per_token || provider.pricing.base_per_token}</td>
+                <td class="px-4 py-2">${profile ? profile.throughput_tok_s : 'n/a'}</td>
+                <td class="px-4 py-2">${provider.reputation}</td>
+              </tr>
+            `;
+          }
+        )
+        .join('');
+      document.getElementById('providers').innerHTML = rows;
+    }
+
+    function renderNodes(nodes) {
+      const rows = nodes
+        .map(
+          (node) => `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${node.id}</td>
+              <td class="px-4 py-2">${node.owner}</td>
+              <td class="px-4 py-2">${node.gpu_model}</td>
+              <td class="px-4 py-2">${node.region}</td>
+              <td class="px-4 py-2">${node.llm_profile.throughput_tok_s}</td>
+              <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
+            </tr>
+          `
+        )
+        .join('');
+      document.getElementById('nodes').innerHTML = rows;
+    }
+
+    function renderTasks(tasks) {
+      const rows = tasks
+        .map(
+          (task) => `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${task.id}</td>
+              <td class="px-4 py-2">${task.owner}</td>
+              <td class="px-4 py-2">${task.total_tokens}</td>
+              <td class="px-4 py-2">${task.segments.length}</td>
+              <td class="px-4 py-2">${task.winning_provider || '-'}</td>
+              <td class="px-4 py-2">${task.completed ? 'Yes' : 'No'}</td>
+            </tr>
+          `
+        )
+        .join('');
+      document.getElementById('tasks').innerHTML = rows;
+    }
+
+    function renderTreasury(treasury) {
+      const cards = [
+        { label: 'AIA Balance', value: treasury.aia_balance },
+        { label: 'WORK Balance', value: treasury.work_balance },
+        { label: 'STOR Balance', value: treasury.stor_balance },
+      ];
+      document.getElementById('treasury').innerHTML = cards
+        .map(
+          (card) => `
+            <div class="bg-gray-800 p-4 rounded shadow">
+              <div class="text-sm uppercase text-gray-400">${card.label}</div>
+              <div class="text-2xl font-bold">${card.value}</div>
+            </div>
+          `
+        )
+        .join('');
+    }
+
+    async function refresh() {
+      try {
+        const [summary, blocks, providers, nodes, tasks, treasury] = await Promise.all([
+          fetchJson('/'),
+          fetchJson('/blocks'),
+          fetchJson('/providers'),
+          fetchJson('/nodes'),
+          fetchJson('/tasks'),
+          fetchJson('/treasury'),
+        ]);
+        renderSummary(summary);
+        renderBlocks(blocks);
+        renderProviders(providers);
+        renderNodes(nodes);
+        renderTasks(tasks);
+        renderTreasury(treasury);
+      } catch (err) {
+        console.error('Failed to refresh explorer', err);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

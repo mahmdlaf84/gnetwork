@@ -1,0 +1,16 @@
+{
+  "accounts": {},
+  "providers": {},
+  "nodes": {},
+  "tasks": {},
+  "blocks": [],
+  "treasury": {
+    "aia_balance": 0,
+    "work_balance": 0,
+    "stor_balance": 0,
+    "fee_bps": 500,
+    "reward_bps": 200,
+    "low_tier_discount_bps": 1000
+  },
+  "next_task_id": 1
+}
