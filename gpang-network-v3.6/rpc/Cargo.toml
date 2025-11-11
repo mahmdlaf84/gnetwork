@@ -1,0 +1,19 @@
+[package]
+name = "rpc"
+version = "0.1.0"
+edition = "2021"
+authors = ["GPANG Network"]
+description = "REST API and consensus loop for GPANG Network"
+
+[dependencies]
+axum = { version = "0.7", features = ["json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ledger = { path = "../ledger" }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = "1"
