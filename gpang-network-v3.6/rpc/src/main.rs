@@ -319,11 +319,12 @@ async fn provider_heartbeat(
 
 #[derive(Debug, Deserialize)]
 struct RegisterNodeRequest {
-    id: String,
     owner: String,
-    gpu_model: String,
     region: String,
     llm_profile: ModelProfile,
+    hardware: NodeHardware,
+    metrics: Option<NodeMetrics>,
+    fingerprint: Option<String>,
 }
 
 async fn register_node(
@@ -332,16 +333,18 @@ async fn register_node(
 ) -> impl IntoResponse {
     let mut ledger = state.ledger.lock().await;
     let node = Node {
-        id: payload.id,
+        id: String::new(),
         owner: payload.owner,
-        gpu_model: payload.gpu_model,
         region: payload.region,
         llm_profile: payload.llm_profile,
         online: true,
         reputation: 0,
-        registered_at: current_timestamp(),
+        registered_at: 0,
+        fingerprint: payload.fingerprint.unwrap_or_default(),
+        hardware: payload.hardware,
+        metrics: payload.metrics.unwrap_or_default(),
     };
-    ledger.register_node(node.clone());
+    let node = ledger.register_node(node);
     if let Err(err) = ledger.persist() {
         error!(?err, "failed to persist node registration");
     }
@@ -352,6 +355,7 @@ async fn register_node(
 struct UpdateNodeStatusRequest {
     node_id: String,
     online: bool,
+    metrics: Option<NodeMetrics>,
 }
 
 async fn update_node_status(
@@ -359,7 +363,7 @@ async fn update_node_status(
     Json(payload): Json<UpdateNodeStatusRequest>,
 ) -> impl IntoResponse {
     let mut ledger = state.ledger.lock().await;
-    match ledger.update_node_status(&payload.node_id, payload.online) {
+    match ledger.update_node_status(&payload.node_id, payload.online, payload.metrics) {
         Ok(()) => {
             if let Err(err) = ledger.persist() {
                 error!(?err, "failed to persist node status");

@@ -56,9 +56,10 @@
             <tr>
               <th class="px-4 py-2 text-left">ID</th>
               <th class="px-4 py-2 text-left">Owner</th>
-              <th class="px-4 py-2 text-left">GPU</th>
               <th class="px-4 py-2 text-left">Region</th>
-              <th class="px-4 py-2 text-left">Throughput</th>
+              <th class="px-4 py-2 text-left">Hardware</th>
+              <th class="px-4 py-2 text-left">Utilization</th>
+              <th class="px-4 py-2 text-left">Network</th>
               <th class="px-4 py-2 text-left">Online</th>
             </tr>
           </thead>
@@ -172,16 +173,53 @@
     function renderNodes(nodes) {
       const rows = nodes
         .map(
-          (node) => `
-            <tr class="border-b border-gray-700">
-              <td class="px-4 py-2">${node.id}</td>
-              <td class="px-4 py-2">${node.owner}</td>
-              <td class="px-4 py-2">${node.gpu_model}</td>
-              <td class="px-4 py-2">${node.region}</td>
-              <td class="px-4 py-2">${node.llm_profile.throughput_tok_s}</td>
-              <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
-            </tr>
-          `
+          (node) => {
+            const hardware = node.hardware || {};
+            const metrics = node.metrics || {};
+            const gpuModel = [hardware.gpu_vendor, hardware.gpu_model]
+              .filter(Boolean)
+              .join(' ');
+            const cpuSummary = hardware.cpu_model
+              ? `${hardware.cpu_model} (${hardware.cpu_cores || '?'}c/${hardware.cpu_threads || '?'}t)`
+              : 'Unknown CPU';
+            const memorySummary = hardware.memory_total_mb
+              ? `${(hardware.memory_total_mb / 1024).toFixed(1)} GB RAM`
+              : 'RAM n/a';
+            const gpuMemory = metrics.gpu_memory_total_mb
+              ? `GPU VRAM ${metrics.gpu_memory_used_mb || 0}/${metrics.gpu_memory_total_mb} MB`
+              : '';
+            const hardwareInfo = [
+              gpuModel || 'Unknown GPU',
+              cpuSummary,
+              memorySummary,
+              gpuMemory,
+              node.fingerprint ? `Fingerprint ${node.fingerprint}` : null,
+              node.llm_profile
+                ? `LLM ${node.llm_profile.model_id} @ ${node.llm_profile.throughput_tok_s.toLocaleString()} tps`
+                : null,
+            ]
+              .filter(Boolean)
+              .join('<br/>');
+            const utilization = [
+              `CPU: ${(metrics.cpu_usage_pct ?? 0).toFixed(1)}%`,
+              `GPU: ${(metrics.gpu_usage_pct ?? 0).toFixed(1)}%`,
+              `Mem: ${(metrics.memory_usage_pct ?? 0).toFixed(1)}%`,
+              `Disk: ${(metrics.disk_usage_pct ?? 0).toFixed(1)}%`,
+              `Load: ${(metrics.machine_load_one ?? 0).toFixed(2)} / ${(metrics.machine_load_five ?? 0).toFixed(2)} / ${(metrics.machine_load_fifteen ?? 0).toFixed(2)}`,
+            ].join('<br/>');
+            const network = `RX ${(metrics.network_rx_mbps ?? 0).toFixed(2)} Mbps<br/>TX ${(metrics.network_tx_mbps ?? 0).toFixed(2)} Mbps`;
+            return `
+              <tr class="border-b border-gray-700">
+                <td class="px-4 py-2">${node.id}</td>
+                <td class="px-4 py-2">${node.owner}</td>
+                <td class="px-4 py-2">${node.region}</td>
+                <td class="px-4 py-2 text-sm leading-5">${hardwareInfo}</td>
+                <td class="px-4 py-2 text-sm leading-5">${utilization}</td>
+                <td class="px-4 py-2 text-sm leading-5">${network}</td>
+                <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
+              </tr>
+            `;
+          }
         )
         .join('');
       document.getElementById('nodes').innerHTML = rows;

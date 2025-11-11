@@ -13,6 +13,7 @@
     "low_tier_discount_bps": 1000
   },
   "next_task_id": 1,
+  "next_node_id": 1,
   "pending_task_proofs": [],
   "network_capacity": {
     "consensus_round": 0,

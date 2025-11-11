@@ -81,9 +81,7 @@ Register a node and submit a task:
 
 ```bash
 cargo run -p gpang-cli -- node register \
-  --id node-1 \
   --owner alice \
-  --gpu-model "RTX 4090" \
   --region AP-SEA \
   --llm-profile '{"model_id":"qwen2.5-7b","quant":"int4","max_ctx":8192,"vram_req_gb":12,"throughput_tok_s":220000}'
 
@@ -107,6 +105,8 @@ cargo run -p gpang-cli -- task proof \
   --region AP-SEA \
   --signature demo-proof
 ```
+
+When registering or updating a node, the CLI auto-discovers CPU, GPU (covering NVIDIA, AMD, and Apple silicon), memory, disk, and network telemetry from the host. A deterministic fingerprint is derived from this hardware snapshot so the ledger can mint a unique on-chain identity per machine while streaming utilization metrics to the explorer dashboard in real time.
 
 Mint tokens and stake:
 

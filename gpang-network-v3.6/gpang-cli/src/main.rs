@@ -1,10 +1,18 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
-use ledger::types::{ModelProfile, TokenKind, TransactionKind};
+use ledger::types::{ModelProfile, NodeHardware, NodeMetrics, TokenKind, TransactionKind};
 use reqwest::Client;
 use serde_json::Value;
-use std::str::FromStr;
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    process::Command,
+    str::FromStr,
+    thread::sleep,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use sysinfo::{CpuExt, DiskExt, LoadAvg, NetworkExt, NetworksExt, System, SystemExt};
 
 #[derive(Parser)]
 #[command(name = "gpang", author, version, about = "GPANG Network CLI", long_about = None)]
@@ -95,16 +103,15 @@ enum NodeCommand {
 #[derive(Args)]
 struct RegisterNodeArgs {
     #[arg(long)]
-    id: String,
-    #[arg(long)]
     owner: String,
-    #[arg(long)]
-    gpu_model: String,
     #[arg(long)]
     region: String,
     /// JSON ModelProfile payload
     #[arg(long)]
     llm_profile: String,
+    /// Optional override for the derived hardware fingerprint
+    #[arg(long)]
+    fingerprint: Option<String>,
 }
 
 #[derive(Args)]
@@ -181,6 +188,305 @@ enum AccountCommand {
     },
     /// Stake AIA into the consensus set
     Stake { owner: String, amount: u64 },
+}
+
+#[derive(Debug, Default)]
+struct GpuSnapshot {
+    vendor: String,
+    model: String,
+    memory_total_mb: u64,
+    memory_used_mb: u64,
+    usage_pct: f32,
+}
+
+fn capture_node_state() -> (NodeHardware, NodeMetrics) {
+    let mut system = System::new_all();
+    system.refresh_all();
+
+    let initial_networks: HashMap<String, (u64, u64)> = system
+        .networks()
+        .iter()
+        .map(|(iface, data)| {
+            (
+                iface.clone(),
+                (data.total_received(), data.total_transmitted()),
+            )
+        })
+        .collect();
+
+    sleep(Duration::from_millis(200));
+    system.refresh_cpu();
+    system.refresh_memory();
+    system.refresh_networks();
+    system.refresh_disks();
+
+    let load_avg: LoadAvg = system.load_average();
+    let total_memory = system.total_memory();
+    let used_memory = system.used_memory();
+    let memory_usage_pct = if total_memory > 0 {
+        (used_memory as f32 / total_memory as f32) * 100.0
+    } else {
+        0.0
+    };
+
+    let mut total_disk_bytes: u128 = 0;
+    let mut used_disk_bytes: u128 = 0;
+    for disk in system.disks() {
+        let total = disk.total_space() as u128;
+        let available = disk.available_space() as u128;
+        total_disk_bytes += total;
+        used_disk_bytes += total.saturating_sub(available);
+    }
+    let disk_usage_pct = if total_disk_bytes > 0 {
+        (used_disk_bytes as f64 / total_disk_bytes as f64 * 100.0) as f32
+    } else {
+        0.0
+    };
+
+    let mut rx_bytes: u64 = 0;
+    let mut tx_bytes: u64 = 0;
+    for (iface, data) in system.networks() {
+        if let Some((start_rx, start_tx)) = initial_networks.get(iface) {
+            rx_bytes = rx_bytes.saturating_add(data.total_received().saturating_sub(*start_rx));
+            tx_bytes = tx_bytes.saturating_add(data.total_transmitted().saturating_sub(*start_tx));
+        }
+    }
+    let interval_secs = 0.2f32;
+    let network_rx_mbps = (rx_bytes as f32 * 8.0) / (interval_secs * 1_000_000.0);
+    let network_tx_mbps = (tx_bytes as f32 * 8.0) / (interval_secs * 1_000_000.0);
+
+    let gpu = detect_gpu_info();
+    let cpu_brand = system.global_cpu_info().brand().to_string();
+    let cpu_threads = system.cpus().len() as u32;
+    let cpu_cores = system.physical_core_count().unwrap_or(cpu_threads as usize) as u32;
+    let memory_total_mb = (total_memory / 1024) as u64;
+    let os_version = system
+        .long_os_version()
+        .or_else(|| system.name())
+        .unwrap_or_else(|| std::env::consts::OS.to_string());
+
+    let hardware = NodeHardware {
+        cpu_model: cpu_brand,
+        cpu_cores,
+        cpu_threads,
+        memory_total_mb,
+        gpu_vendor: if gpu.vendor.is_empty() {
+            "Unknown".to_string()
+        } else {
+            gpu.vendor.clone()
+        },
+        gpu_model: if gpu.model.is_empty() {
+            "Unknown".to_string()
+        } else {
+            gpu.model.clone()
+        },
+        gpu_vram_mb: gpu.memory_total_mb,
+        os: os_version,
+    };
+
+    let metrics = NodeMetrics {
+        timestamp: now_ms(),
+        cpu_usage_pct: system.global_cpu_info().cpu_usage(),
+        memory_usage_pct,
+        gpu_usage_pct: gpu.usage_pct,
+        machine_load_one: load_avg.one as f32,
+        machine_load_five: load_avg.five as f32,
+        machine_load_fifteen: load_avg.fifteen as f32,
+        disk_usage_pct,
+        disk_read_mbps: 0.0,
+        disk_write_mbps: 0.0,
+        network_rx_mbps,
+        network_tx_mbps,
+        gpu_memory_used_mb: gpu.memory_used_mb,
+        gpu_memory_total_mb: gpu.memory_total_mb,
+    };
+
+    (hardware, metrics)
+}
+
+fn capture_runtime_metrics() -> NodeMetrics {
+    let (_, metrics) = capture_node_state();
+    metrics
+}
+
+fn derive_fingerprint(hardware: &NodeHardware, owner: &str, override_fp: Option<String>) -> String {
+    if let Some(fp) = override_fp {
+        return fp;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hardware.cpu_model.hash(&mut hasher);
+    hardware.cpu_cores.hash(&mut hasher);
+    hardware.cpu_threads.hash(&mut hasher);
+    hardware.memory_total_mb.hash(&mut hasher);
+    hardware.gpu_vendor.hash(&mut hasher);
+    hardware.gpu_model.hash(&mut hasher);
+    hardware.gpu_vram_mb.hash(&mut hasher);
+    hardware.os.hash(&mut hasher);
+    owner.hash(&mut hasher);
+    format!("0x{:016x}", hasher.finish())
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn detect_gpu_info() -> GpuSnapshot {
+    if let Some(output) = run_command_output(
+        "nvidia-smi",
+        &[
+            "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ],
+    ) {
+        if let Some(line) = output.lines().next() {
+            let parts: Vec<&str> = line.split(',').map(|p| p.trim()).collect();
+            if parts.len() >= 4 {
+                let total = parts[1]
+                    .parse::<f64>()
+                    .map(|v| v.round() as u64)
+                    .unwrap_or_default();
+                let used = parts[2]
+                    .parse::<f64>()
+                    .map(|v| v.round() as u64)
+                    .unwrap_or_default();
+                let usage = parts[3].parse::<f32>().unwrap_or_default();
+                return GpuSnapshot {
+                    vendor: "NVIDIA".to_string(),
+                    model: parts[0].to_string(),
+                    memory_total_mb: total,
+                    memory_used_mb: used,
+                    usage_pct: usage,
+                };
+            }
+        }
+    }
+
+    if let Some(output) = run_command_output("system_profiler", &["SPDisplaysDataType", "-json"]) {
+        if let Ok(value) = serde_json::from_str::<Value>(&output) {
+            if let Some(array) = value.get("SPDisplaysDataType").and_then(|v| v.as_array()) {
+                if let Some(entry) = array.first() {
+                    let vendor = entry
+                        .get("spdisplays_vendor")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Apple");
+                    let model = entry
+                        .get("spdisplays_chipset-model")
+                        .or_else(|| entry.get("_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Apple GPU");
+                    let memory_total_mb = entry
+                        .get("spdisplays_vram")
+                        .and_then(|v| v.as_str())
+                        .map(parse_size_to_mb)
+                        .unwrap_or_default();
+                    return GpuSnapshot {
+                        vendor: vendor.to_string(),
+                        model: model.to_string(),
+                        memory_total_mb,
+                        memory_used_mb: 0,
+                        usage_pct: 0.0,
+                    };
+                }
+            }
+        }
+    }
+
+    if let Some(output) = run_command_output(
+        "rocm-smi",
+        &[
+            "--showproductname",
+            "--showmeminfo",
+            "vram",
+            "--showuse",
+            "--json",
+        ],
+    ) {
+        if let Ok(value) = serde_json::from_str::<Value>(&output) {
+            if let Some(obj) = value.as_object() {
+                for entry in obj.values() {
+                    let model = entry
+                        .get("Card SKU")
+                        .or_else(|| entry.get("card_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("AMD GPU")
+                        .to_string();
+                    let memory_total_mb = entry
+                        .get("VRAM Total Memory (B)")
+                        .or_else(|| entry.get("vram_total"))
+                        .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|n| n.to_string())))
+                        .map(|s| parse_size_to_mb(&s))
+                        .unwrap_or_default();
+                    let memory_used_mb = entry
+                        .get("VRAM Used Memory (B)")
+                        .or_else(|| entry.get("vram_used"))
+                        .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|n| n.to_string())))
+                        .map(|s| parse_size_to_mb(&s))
+                        .unwrap_or_default();
+                    let usage_pct = entry
+                        .get("GPU use (%)")
+                        .or_else(|| entry.get("gpu_use"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or_default() as f32;
+                    return GpuSnapshot {
+                        vendor: "AMD".to_string(),
+                        model,
+                        memory_total_mb,
+                        memory_used_mb,
+                        usage_pct,
+                    };
+                }
+            }
+        }
+    }
+
+    GpuSnapshot::default()
+}
+
+fn run_command_output(cmd: &str, args: &[&str]) -> Option<String> {
+    Command::new(cmd)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|out| out.trim().to_string())
+        .filter(|out| !out.is_empty())
+}
+
+fn parse_size_to_mb(value: &str) -> u64 {
+    let cleaned = value.trim().to_lowercase();
+    if cleaned.is_empty() {
+        return 0;
+    }
+    if cleaned.chars().all(|c| c.is_ascii_digit()) {
+        let bytes: f64 = cleaned.parse().unwrap_or(0.0);
+        return (bytes / (1024.0 * 1024.0)).round() as u64;
+    }
+    let mut numeric = String::new();
+    for ch in cleaned.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            numeric.push(ch);
+        } else if !numeric.is_empty() {
+            break;
+        }
+    }
+    let number: f64 = numeric.parse().unwrap_or(0.0);
+    if cleaned.contains("tb") {
+        (number * 1024.0 * 1024.0).round() as u64
+    } else if cleaned.contains("gb") {
+        (number * 1024.0).round() as u64
+    } else if cleaned.contains("mb") {
+        number.round() as u64
+    } else if cleaned.contains("kb") {
+        (number / 1024.0).round() as u64
+    } else if cleaned.contains('b') {
+        (number / (1024.0 * 1024.0)).round() as u64
+    } else {
+        number.round() as u64
+    }
 }
 
 #[tokio::main]
@@ -271,14 +577,23 @@ async fn handle_provider(client: &Client, rpc: &str, cmd: ProviderCommand) -> Re
 async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()> {
     match cmd {
         NodeCommand::Register(args) => {
+            let RegisterNodeArgs {
+                owner,
+                region,
+                llm_profile,
+                fingerprint,
+            } = args;
             let profile: ModelProfile =
-                serde_json::from_str(&args.llm_profile).context("invalid llm_profile JSON")?;
+                serde_json::from_str(&llm_profile).context("invalid llm_profile JSON")?;
+            let (hardware, metrics) = capture_node_state();
+            let fingerprint = derive_fingerprint(&hardware, &owner, fingerprint);
             let body = serde_json::json!({
-                "id": args.id,
-                "owner": args.owner,
-                "gpu_model": args.gpu_model,
-                "region": args.region,
+                "owner": owner,
+                "region": region,
                 "llm_profile": profile,
+                "hardware": hardware,
+                "metrics": metrics,
+                "fingerprint": fingerprint,
             });
             let res = client
                 .post(format!("{}/node/register", rpc))
@@ -290,10 +605,23 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
             println!("{}", res.text().await?);
         }
         NodeCommand::Status(args) => {
-            let body = serde_json::json!({
-                "node_id": args.node_id,
-                "online": args.online,
-            });
+            let metrics = if args.online {
+                Some(capture_runtime_metrics())
+            } else {
+                None
+            };
+            let body = if let Some(metrics) = metrics {
+                serde_json::json!({
+                    "node_id": args.node_id,
+                    "online": args.online,
+                    "metrics": metrics,
+                })
+            } else {
+                serde_json::json!({
+                    "node_id": args.node_id,
+                    "online": args.online,
+                })
+            };
             client
                 .post(format!("{}/node/status", rpc))
                 .json(&body)

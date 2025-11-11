@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -19,8 +20,8 @@ use tracing::info;
 pub mod types;
 
 use types::{
-    Account, Block, LedgerState, ModelProfile, Node, Provider, ScheduledProvider, Task, TaskProof,
-    TaskSegment, TokenKind, Transaction, TransactionKind,
+    Account, Block, LedgerState, ModelProfile, Node, NodeHardware, NodeMetrics, Provider,
+    ScheduledProvider, Task, TaskProof, TaskSegment, TokenKind, Transaction, TransactionKind,
 };
 
 /// Returns the current Unix timestamp in milliseconds.
@@ -364,10 +365,33 @@ impl Ledger {
         Ok(())
     }
 
-    /// Registers a node in the ledger.
-    pub fn register_node(&mut self, mut node: Node) {
+    /// Registers a node in the ledger and returns the stored record.
+    pub fn register_node(&mut self, mut node: Node) -> Node {
         node.registered_at = current_timestamp();
-        self.state.nodes.insert(node.id.clone(), node);
+        node.id = format!("node-{}", self.state.next_node_id);
+        self.state.next_node_id += 1;
+        if node.fingerprint.is_empty() {
+            node.fingerprint = Self::fingerprint_for(&node.hardware, &node.owner);
+        }
+        if node.metrics.timestamp == 0 {
+            node.metrics.timestamp = node.registered_at;
+        }
+        self.state.nodes.insert(node.id.clone(), node.clone());
+        node
+    }
+
+    fn fingerprint_for(hardware: &NodeHardware, owner: &str) -> String {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hardware.cpu_model.hash(&mut hasher);
+        hardware.cpu_cores.hash(&mut hasher);
+        hardware.cpu_threads.hash(&mut hasher);
+        hardware.memory_total_mb.hash(&mut hasher);
+        hardware.gpu_vendor.hash(&mut hasher);
+        hardware.gpu_model.hash(&mut hasher);
+        hardware.gpu_vram_mb.hash(&mut hasher);
+        hardware.os.hash(&mut hasher);
+        owner.hash(&mut hasher);
+        format!("0x{:016x}", hasher.finish())
     }
 
     /// Submits a new task and returns the identifier.
@@ -467,14 +491,25 @@ impl Ledger {
         Ok(())
     }
 
-    /// Updates a node's online status.
-    pub fn update_node_status(&mut self, node_id: &str, online: bool) -> Result<(), LedgerError> {
+    /// Updates a node's online status and optionally refreshes metrics.
+    pub fn update_node_status(
+        &mut self,
+        node_id: &str,
+        online: bool,
+        metrics: Option<NodeMetrics>,
+    ) -> Result<(), LedgerError> {
         let node = self
             .state
             .nodes
             .get_mut(node_id)
             .ok_or_else(|| LedgerError::NodeNotFound(node_id.to_string()))?;
         node.online = online;
+        if let Some(mut report) = metrics {
+            if report.timestamp == 0 {
+                report.timestamp = current_timestamp();
+            }
+            node.metrics = report;
+        }
         Ok(())
     }
 

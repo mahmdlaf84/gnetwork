@@ -149,17 +149,52 @@ pub struct Provider {
     pub throughput_score: f64,
 }
 
+/// Static hardware capabilities reported by a node when registering.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeHardware {
+    pub cpu_model: String,
+    pub cpu_cores: u32,
+    pub cpu_threads: u32,
+    pub memory_total_mb: u64,
+    pub gpu_vendor: String,
+    pub gpu_model: String,
+    pub gpu_vram_mb: u64,
+    pub os: String,
+}
+
+/// Most recent runtime metrics reported by a node.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeMetrics {
+    pub timestamp: u64,
+    pub cpu_usage_pct: f32,
+    pub memory_usage_pct: f32,
+    pub gpu_usage_pct: f32,
+    pub machine_load_one: f32,
+    pub machine_load_five: f32,
+    pub machine_load_fifteen: f32,
+    pub disk_usage_pct: f32,
+    pub disk_read_mbps: f32,
+    pub disk_write_mbps: f32,
+    pub network_rx_mbps: f32,
+    pub network_tx_mbps: f32,
+    pub gpu_memory_used_mb: u64,
+    pub gpu_memory_total_mb: u64,
+}
+
 /// Registered node metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Node {
     pub id: String,
     pub owner: String,
-    pub gpu_model: String,
     pub region: String,
     pub llm_profile: ModelProfile,
     pub online: bool,
     pub reputation: u64,
     pub registered_at: u64,
+    pub fingerprint: String,
+    pub hardware: NodeHardware,
+    pub metrics: NodeMetrics,
 }
 
 /// Captures the outcome of a FlashRace segment.
@@ -289,6 +324,8 @@ pub struct LedgerState {
     pub blocks: Vec<Block>,
     pub treasury: Treasury,
     pub next_task_id: u64,
+    #[serde(default = "default_next_node_id")]
+    pub next_node_id: u64,
     pub pending_task_proofs: Vec<TaskProof>,
     pub network_capacity: NetworkCapacity,
 }
@@ -303,10 +340,15 @@ impl Default for LedgerState {
             blocks: Vec::new(),
             treasury: Treasury::default(),
             next_task_id: 1,
+            next_node_id: 1,
             pending_task_proofs: Vec::new(),
             network_capacity: NetworkCapacity::default(),
         }
     }
+}
+
+fn default_next_node_id() -> u64 {
+    1
 }
 
 impl LedgerState {
@@ -412,26 +454,80 @@ impl LedgerState {
         let node_alpha = Node {
             id: "node-alpha".to_string(),
             owner: "foundation".to_string(),
-            gpu_model: "NVIDIA H100".to_string(),
             region: "AP-SEA".to_string(),
             llm_profile: profile_flagship.clone(),
             online: true,
             reputation: 990,
             registered_at: timestamp,
+            fingerprint: "0xalpha".to_string(),
+            hardware: NodeHardware {
+                cpu_model: "AMD EPYC 9654".to_string(),
+                cpu_cores: 96,
+                cpu_threads: 192,
+                memory_total_mb: 2_097_152,
+                gpu_vendor: "NVIDIA".to_string(),
+                gpu_model: "H100".to_string(),
+                gpu_vram_mb: 80_000,
+                os: "Linux".to_string(),
+            },
+            metrics: NodeMetrics {
+                timestamp,
+                cpu_usage_pct: 12.5,
+                memory_usage_pct: 40.0,
+                gpu_usage_pct: 18.0,
+                machine_load_one: 1.5,
+                machine_load_five: 1.1,
+                machine_load_fifteen: 0.9,
+                disk_usage_pct: 55.0,
+                disk_read_mbps: 120.0,
+                disk_write_mbps: 90.0,
+                network_rx_mbps: 800.0,
+                network_tx_mbps: 760.0,
+                gpu_memory_used_mb: 32_000,
+                gpu_memory_total_mb: 80_000,
+            },
         };
         let node_beta = Node {
             id: "node-beta".to_string(),
             owner: "builder".to_string(),
-            gpu_model: "RTX 6000 Ada".to_string(),
             region: "NA-USA".to_string(),
             llm_profile: profile_usa,
             online: true,
             reputation: 905,
             registered_at: timestamp,
+            fingerprint: "0xbeta".to_string(),
+            hardware: NodeHardware {
+                cpu_model: "Intel Xeon Platinum 8490H".to_string(),
+                cpu_cores: 60,
+                cpu_threads: 120,
+                memory_total_mb: 1_048_576,
+                gpu_vendor: "NVIDIA".to_string(),
+                gpu_model: "RTX 6000 Ada".to_string(),
+                gpu_vram_mb: 48_000,
+                os: "Linux".to_string(),
+            },
+            metrics: NodeMetrics {
+                timestamp,
+                cpu_usage_pct: 22.0,
+                memory_usage_pct: 55.0,
+                gpu_usage_pct: 30.0,
+                machine_load_one: 2.0,
+                machine_load_five: 1.4,
+                machine_load_fifteen: 1.1,
+                disk_usage_pct: 61.0,
+                disk_read_mbps: 80.0,
+                disk_write_mbps: 72.0,
+                network_rx_mbps: 420.0,
+                network_tx_mbps: 405.0,
+                gpu_memory_used_mb: 20_000,
+                gpu_memory_total_mb: 48_000,
+            },
         };
 
         state.nodes.insert(node_alpha.id.clone(), node_alpha);
         state.nodes.insert(node_beta.id.clone(), node_beta);
+
+        state.next_node_id = 3;
 
         state.treasury = Treasury::with_balances(900_000_000_000, 400_000_000_000, 150_000_000_000);
         state.network_capacity.target_tokens_per_sec = 10_000_000;
