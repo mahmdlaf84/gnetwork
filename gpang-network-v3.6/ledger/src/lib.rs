@@ -281,6 +281,9 @@ impl Ledger {
                     }
                 }
             }
+            TransactionKind::TaskProofCommit { proof } => {
+                self.record_task_proof(proof.clone())?;
+            }
         }
         Ok(())
     }
@@ -516,6 +519,17 @@ impl Ledger {
             .providers
             .get_mut(&proof.provider_id)
             .ok_or_else(|| LedgerError::ProviderNotFound(proof.provider_id.clone()))?;
+        if proof.round < self.state.network_capacity.consensus_round {
+            return Err(LedgerError::InvalidTransaction(format!(
+                "stale task-proof round {} < {}",
+                proof.round, self.state.network_capacity.consensus_round
+            )));
+        }
+        self.state.pending_task_proofs.retain(|existing| {
+            !(existing.task_id == proof.task_id
+                && existing.segment_id == proof.segment_id
+                && existing.provider_id == proof.provider_id)
+        });
         provider.reputation = provider
             .reputation
             .saturating_add((proof.tokens_processed / 1_000_000).max(1));
