@@ -1,0 +1,24 @@
+{
+  "accounts": {},
+  "providers": {},
+  "nodes": {},
+  "tasks": {},
+  "blocks": [],
+  "treasury": {
+    "aia_balance": 0,
+    "work_balance": 0,
+    "stor_balance": 0,
+    "fee_bps": 500,
+    "reward_bps": 200,
+    "low_tier_discount_bps": 1000
+  },
+  "next_task_id": 1,
+  "pending_task_proofs": [],
+  "network_capacity": {
+    "consensus_round": 0,
+    "tokens_processed": 0,
+    "target_tokens_per_sec": 10000000,
+    "max_parallel_nodes": 100000000,
+    "peak_observed_tokens_per_sec": 0
+  }
+}
