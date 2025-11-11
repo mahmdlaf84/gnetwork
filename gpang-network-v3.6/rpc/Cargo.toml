@@ -16,3 +16,4 @@ serde_json = { workspace = true }
 ledger = { path = "../ledger" }
 thiserror = { workspace = true }
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }

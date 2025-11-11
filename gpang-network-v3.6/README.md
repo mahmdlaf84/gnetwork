@@ -37,6 +37,22 @@ The script initializes `ledger_v35.json` if missing and starts the RPC service o
 - `LEDGER_FILE` — Override the ledger path (defaults to `ledger_v35.json`).
 - `RUST_LOG` — Standard `tracing` filter (defaults to `info` in the script).
 
+## Starting a Local Testnet
+
+For an isolated playground with deterministic genesis data, launch the RPC service in **testnet** mode. This creates a `.gpang-testnet/ledger.json` snapshot seeded with funded accounts, multi-region providers, and validator nodes so you can interact with the network immediately.
+
+```bash
+./scripts/start-testnet.sh
+```
+
+Alternatively run the RPC binary directly:
+
+```bash
+cargo run -p rpc -- --testnet --ledger .gpang-testnet/ledger.json --listen 127.0.0.1:8080
+```
+
+Use the standard CLI commands to inspect balances, register additional nodes, or submit tasks against the seeded infrastructure.
+
 ## CLI Usage
 
 ```bash

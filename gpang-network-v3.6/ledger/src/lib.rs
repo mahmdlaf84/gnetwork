@@ -81,6 +81,27 @@ impl Ledger {
         }
     }
 
+    /// Initializes a testnet ledger snapshot, overwriting any prior file at the path.
+    pub fn initialize_testnet(path: impl AsRef<Path>) -> Result<Self, LedgerError> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+
+        let state = LedgerState::testnet_genesis(current_timestamp());
+        let ledger = Self {
+            path: path.clone(),
+            state,
+        };
+        ledger.persist()?;
+        Ok(ledger)
+    }
+
     /// Persists the current state to disk.
     pub fn persist(&self) -> Result<(), LedgerError> {
         let data = serde_json::to_string_pretty(&self.state)?;

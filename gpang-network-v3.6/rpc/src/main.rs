@@ -1,5 +1,6 @@
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -8,6 +9,7 @@ use axum::{
     extract::State, http::StatusCode, response::IntoResponse, routing::get, routing::post, Json,
     Router,
 };
+use clap::Parser;
 use ledger::{current_timestamp, types::*, Ledger, NetworkSummary, DEFAULT_LEDGER_FILE};
 use serde::Deserialize;
 use tokio::{signal, sync::Mutex};
@@ -20,14 +22,40 @@ struct AppState {
     mempool: Arc<Mutex<Vec<Transaction>>>,
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about = "GPANG Network RPC service", long_about = None)]
+struct Args {
+    /// Address to listen on (ip:port)
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    listen: SocketAddr,
+    /// Override the ledger persistence path
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    /// Bootstrap a fresh deterministic testnet snapshot before starting
+    #[arg(long)]
+    testnet: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
     fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_target(false)
         .init();
 
-    let ledger = Ledger::load_or_initialize(DEFAULT_LEDGER_FILE)?;
+    let ledger_path = args
+        .ledger
+        .or_else(|| std::env::var_os("LEDGER_FILE").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_LEDGER_FILE));
+
+    let ledger = if args.testnet {
+        info!(path = %ledger_path.display(), "initializing testnet ledger");
+        Ledger::initialize_testnet(&ledger_path)?
+    } else {
+        info!(path = %ledger_path.display(), "loading ledger");
+        Ledger::load_or_initialize(&ledger_path)?
+    };
     let state = AppState {
         ledger: Arc::new(Mutex::new(ledger)),
         mempool: Arc::new(Mutex::new(Vec::new())),
@@ -53,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/consensus/task-proof", post(submit_task_proof))
         .with_state(state.clone());
 
-    let addr: SocketAddr = "0.0.0.0:8080".parse()?;
+    let addr = args.listen;
     info!(%addr, "starting RPC server");
     axum::serve(
         tokio::net::TcpListener::bind(addr).await?,
