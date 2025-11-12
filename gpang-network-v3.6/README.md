@@ -19,10 +19,10 @@ GPANG Network is a Rust-based prototype for a decentralized GPU marketplace with
 ## Building
 
 ```bash
-cargo build
+cargo build --release
 ```
 
-The command builds all workspace members. The ledger crate is pure library code, while the `rpc` and `gpang-cli` crates compile into executables.
+The command builds all workspace members in release mode. The ledger crate is pure library code, while the `rpc` and `gpang-cli` crates compile into executables that the helper scripts launch directly.
 
 ## Running the Node
 
@@ -48,7 +48,7 @@ For an isolated playground with deterministic genesis data, launch the RPC servi
 Alternatively run the RPC binary directly:
 
 ```bash
-cargo run -p rpc -- --testnet --ledger .gpang-testnet/ledger.json --listen 127.0.0.1:8080
+./target/release/rpc --testnet --ledger .gpang-testnet/ledger.json --listen 127.0.0.1:8080
 ```
 
 Use the standard CLI commands to inspect balances, register additional nodes, or submit tasks against the seeded infrastructure.
@@ -56,15 +56,17 @@ Use the standard CLI commands to inspect balances, register additional nodes, or
 ## CLI Usage
 
 ```bash
-cargo run -p gpang-cli -- --help
+./scripts/gpang --help
 ```
+
+The helper script compiles the `gpang-cli` binary in release mode on first use and reuses the artifact for subsequent commands, so you never need to invoke `cargo run` manually.
 
 ### Examples
 
 Register a GPU provider and set model profiles:
 
 ```bash
-cargo run -p gpang-cli -- provider upsert-gpu \
+./scripts/gpang provider upsert-gpu \
   --id prov-fast \
   --endpoint http://127.0.0.1:8080 \
   --owner alice \
@@ -72,7 +74,7 @@ cargo run -p gpang-cli -- provider upsert-gpu \
   --gpu-model "RTX 4090" \
   --vram-gb 24
 
-cargo run -p gpang-cli -- provider set-models \
+./scripts/gpang provider set-models \
   --id prov-fast \
   --profiles '[{"model_id":"qwen2.5-7b","quant":"int4","max_ctx":8192,"vram_req_gb":12,"throughput_tok_s":220000}]'
 ```
@@ -80,12 +82,12 @@ cargo run -p gpang-cli -- provider set-models \
 Register a node and submit a task:
 
 ```bash
-cargo run -p gpang-cli -- node register \
+./scripts/gpang node register \
   --owner alice \
   --region AP-SEA \
   --llm-profile '{"model_id":"qwen2.5-7b","quant":"int4","max_ctx":8192,"vram_req_gb":12,"throughput_tok_s":220000}'
 
-cargo run -p gpang-cli -- task submit \
+./scripts/gpang task submit \
   --owner alice \
   --content-hash Qm123... \
   --total-tokens 300000 \
@@ -94,7 +96,7 @@ cargo run -p gpang-cli -- task submit \
   --preferred-region AP-SEA
 
 # Submit a chat-oriented task that aggregates answers from multiple nodes
-cargo run -p gpang-cli -- task submit \
+./scripts/gpang task submit \
   --owner alice \
   --content-hash chat-001 \
   --total-tokens 120000 \
@@ -104,7 +106,7 @@ cargo run -p gpang-cli -- task submit \
   --chat-prompt "Summarize the latest GPU architecture breakthroughs across vendors"
 
 # Submit a task-proof commitment to advance consensus
-cargo run -p gpang-cli -- task proof \
+./scripts/gpang task proof \
   --round 1 \
   --task-id task-1 \
   --segment-id seg-1 \
@@ -125,8 +127,8 @@ Chat-mode tasks fan out to the top scheduled providers, capture their conversati
 Mint tokens and stake:
 
 ```bash
-cargo run -p gpang-cli -- account mint --to alice --token AIA --amount 100000
-cargo run -p gpang-cli -- account stake --owner alice --amount 50000
+./scripts/gpang account mint --to alice --token AIA --amount 100000
+./scripts/gpang account stake --owner alice --amount 50000
 ```
 
 ## Explorer
