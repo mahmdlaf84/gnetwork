@@ -157,6 +157,86 @@ impl Ledger {
             .max((provider.bandwidth_gbps as f64) * 1_000.0)
     }
 
+    fn recalculate_average_tasks(&mut self) {
+        let active = self.state.nodes.values().filter(|node| node.online).count() as f64;
+        let denom = if active > 0.0 { active } else { 1.0 };
+        self.state.network_capacity.average_tasks_per_node =
+            self.state.network_capacity.total_task_slots as f64 / denom;
+    }
+
+    fn decentralization_weight_for(
+        task_slots: u64,
+        segments: u64,
+        average: f64,
+        throughput: u64,
+    ) -> f64 {
+        let avg = average.max(1.0);
+        let load_ratio = task_slots as f64 / avg;
+        let fairness = if load_ratio >= 1.0 {
+            1.0 / (1.0 + (load_ratio - 1.0))
+        } else {
+            1.0 + (1.0 - load_ratio) * 0.3
+        }
+        .clamp(0.5, 2.0);
+        let completion_ratio = if task_slots == 0 {
+            1.0
+        } else {
+            (segments as f64 / task_slots as f64).clamp(0.25, 1.5)
+        };
+        let throughput_factor = ((throughput as f64 / 100_000.0).max(0.1))
+            .sqrt()
+            .clamp(0.5, 2.0);
+        fairness * completion_ratio * throughput_factor
+    }
+
+    fn apply_task_share_for_node(&mut self, node_id: &str) {
+        {
+            let Some(node) = self.state.nodes.get_mut(node_id) else {
+                return;
+            };
+            node.task_slots_granted = node.task_slots_granted.saturating_add(1);
+            node.task_segments_completed = node.task_segments_completed.saturating_add(1);
+        }
+        self.state.network_capacity.total_task_slots = self
+            .state
+            .network_capacity
+            .total_task_slots
+            .saturating_add(1);
+        self.recalculate_average_tasks();
+        if let Some(node) = self.state.nodes.get_mut(node_id) {
+            node.decentralization_weight = Self::decentralization_weight_for(
+                node.task_slots_granted,
+                node.task_segments_completed,
+                self.state.network_capacity.average_tasks_per_node,
+                node.llm_profile.throughput_tok_s,
+            );
+        }
+    }
+
+    fn consensus_score_for_node(&self, node: &Node, owner_stake: f64) -> f64 {
+        let reputation_factor = 1.0 + (node.reputation as f64 / 1_000.0);
+        let throughput_factor =
+            ((node.llm_profile.throughput_tok_s as f64 / 1_000.0).max(1.0)).sqrt();
+        let fairness = if node.decentralization_weight > 0.0 {
+            node.decentralization_weight
+        } else {
+            Self::decentralization_weight_for(
+                node.task_slots_granted,
+                node.task_segments_completed,
+                self.state.network_capacity.average_tasks_per_node,
+                node.llm_profile.throughput_tok_s,
+            )
+        };
+        let load_ratio = if self.state.network_capacity.average_tasks_per_node > 0.0 {
+            node.task_slots_granted as f64
+                / self.state.network_capacity.average_tasks_per_node.max(1.0)
+        } else {
+            1.0
+        };
+        let load_penalty = (1.0 / (1.0 + load_ratio)).clamp(0.35, 1.0);
+        (owner_stake.sqrt() + throughput_factor) * reputation_factor * fairness * load_penalty
+    }
+
     fn region_affinity(preferred: Option<&str>, provider_region: &str) -> f64 {
         if let Some(pref) = preferred {
             if pref.eq_ignore_ascii_case(provider_region) {
@@ -393,7 +473,16 @@ impl Ledger {
         if node.metrics.timestamp == 0 {
             node.metrics.timestamp = node.registered_at;
         }
+        node.task_slots_granted = 0;
+        node.task_segments_completed = 0;
+        node.decentralization_weight = Self::decentralization_weight_for(
+            node.task_slots_granted,
+            node.task_segments_completed,
+            self.state.network_capacity.average_tasks_per_node,
+            node.llm_profile.throughput_tok_s,
+        );
         self.state.nodes.insert(node.id.clone(), node.clone());
+        self.recalculate_average_tasks();
         node
     }
 
@@ -783,6 +872,9 @@ impl Ledger {
             proofs.sort_by_key(|proof| proof.latency_ms);
             if let Some(best) = proofs.first() {
                 let reward = self.calculate_segment_reward(best);
+                if let Some(node_id) = best.node_id.as_deref() {
+                    self.apply_task_share_for_node(node_id);
+                }
                 let receipt = Transaction {
                     id: format!("segment-{}-{}", task_id, best.segment_id),
                     timestamp: current_timestamp(),
@@ -829,8 +921,7 @@ impl Ledger {
                 .get(&node.owner)
                 .map(|acct| acct.stake_balance as f64)
                 .unwrap_or(0.0);
-            let score =
-                owner_stake + node.reputation as f64 + node.llm_profile.throughput_tok_s as f64;
+            let score = self.consensus_score_for_node(node, owner_stake);
             if let Some((_, best_score)) = &best {
                 if score > *best_score {
                     best = Some((node.id.clone(), score));
@@ -856,6 +947,8 @@ pub struct NetworkSummary {
     pub peak_tokens_per_sec: u64,
     pub total_tokens_processed: u128,
     pub max_parallel_nodes: u64,
+    pub total_task_slots: u128,
+    pub average_tasks_per_node: f64,
 }
 
 impl From<&LedgerState> for NetworkSummary {
@@ -877,6 +970,8 @@ impl From<&LedgerState> for NetworkSummary {
             peak_tokens_per_sec: state.network_capacity.peak_observed_tokens_per_sec,
             total_tokens_processed: state.network_capacity.tokens_processed,
             max_parallel_nodes: state.network_capacity.max_parallel_nodes,
+            total_task_slots: state.network_capacity.total_task_slots,
+            average_tasks_per_node: state.network_capacity.average_tasks_per_node,
         }
     }
 }

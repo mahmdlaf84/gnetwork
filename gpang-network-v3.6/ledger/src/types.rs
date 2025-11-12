@@ -201,6 +201,9 @@ pub struct Node {
     pub fingerprint: String,
     pub hardware: NodeHardware,
     pub metrics: NodeMetrics,
+    pub task_slots_granted: u64,
+    pub task_segments_completed: u64,
+    pub decentralization_weight: f64,
 }
 
 /// Captures the outcome of a FlashRace segment.
@@ -339,6 +342,8 @@ pub struct NetworkCapacity {
     pub target_tokens_per_sec: u64,
     pub max_parallel_nodes: u64,
     pub peak_observed_tokens_per_sec: u64,
+    pub total_task_slots: u128,
+    pub average_tasks_per_node: f64,
 }
 
 impl Default for NetworkCapacity {
@@ -349,6 +354,8 @@ impl Default for NetworkCapacity {
             target_tokens_per_sec: 10_000_000,
             max_parallel_nodes: 100_000_000,
             peak_observed_tokens_per_sec: 0,
+            total_task_slots: 0,
+            average_tasks_per_node: 0.0,
         }
     }
 }
@@ -533,6 +540,9 @@ impl LedgerState {
                 gpu_memory_used_mb: 32_000,
                 gpu_memory_total_mb: 80_000,
             },
+            task_slots_granted: 0,
+            task_segments_completed: 0,
+            decentralization_weight: 1.0,
         };
         let node_beta = Node {
             id: "node-beta".to_string(),
@@ -569,6 +579,9 @@ impl LedgerState {
                 gpu_memory_used_mb: 20_000,
                 gpu_memory_total_mb: 48_000,
             },
+            task_slots_granted: 0,
+            task_segments_completed: 0,
+            decentralization_weight: 1.0,
         };
 
         state.nodes.insert(node_alpha.id.clone(), node_alpha);

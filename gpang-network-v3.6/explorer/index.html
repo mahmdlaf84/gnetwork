@@ -60,6 +60,7 @@
               <th class="px-4 py-2 text-left">Hardware</th>
               <th class="px-4 py-2 text-left">Utilization</th>
               <th class="px-4 py-2 text-left">Network</th>
+              <th class="px-4 py-2 text-left">Task Share</th>
               <th class="px-4 py-2 text-left">Online</th>
             </tr>
           </thead>
@@ -128,6 +129,14 @@
         { label: 'Tokens Processed', value: number(summary.total_tokens_processed) },
         { label: 'Max Parallel Nodes', value: number(summary.max_parallel_nodes) },
         { label: 'Total Tasks', value: number(summary.total_tasks) },
+        { label: 'Total Task Slots', value: number(summary.total_task_slots) },
+        {
+          label: 'Avg Tasks / Node',
+          value:
+            typeof summary.average_tasks_per_node === 'number'
+              ? summary.average_tasks_per_node.toFixed(2)
+              : '0.00',
+        },
       ];
       document.getElementById('summary').innerHTML = cards
         .map(
@@ -218,6 +227,14 @@
               `Load: ${(metrics.machine_load_one ?? 0).toFixed(2)} / ${(metrics.machine_load_five ?? 0).toFixed(2)} / ${(metrics.machine_load_fifteen ?? 0).toFixed(2)}`,
             ].join('<br/>');
             const network = `RX ${(metrics.network_rx_mbps ?? 0).toFixed(2)} Mbps<br/>TX ${(metrics.network_tx_mbps ?? 0).toFixed(2)} Mbps`;
+            const weight = typeof node.decentralization_weight === 'number'
+              ? node.decentralization_weight.toFixed(2)
+              : Number(node.decentralization_weight || 0).toFixed(2);
+            const taskShare = [
+              `Slots: ${node.task_slots_granted || 0}`,
+              `Segments: ${node.task_segments_completed || 0}`,
+              `Weight: ${weight}`,
+            ].join('<br/>');
             return `
               <tr class="border-b border-gray-700">
                 <td class="px-4 py-2">${node.id}</td>
@@ -226,6 +243,7 @@
                 <td class="px-4 py-2 text-sm leading-5">${hardwareInfo}</td>
                 <td class="px-4 py-2 text-sm leading-5">${utilization}</td>
                 <td class="px-4 py-2 text-sm leading-5">${network}</td>
+                <td class="px-4 py-2 text-sm leading-5">${taskShare}</td>
                 <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
               </tr>
             `;

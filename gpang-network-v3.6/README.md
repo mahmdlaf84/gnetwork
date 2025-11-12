@@ -158,12 +158,12 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 A background task ticks every 3 seconds:
 
 1. Drains mempool transactions accepted via `/tx` and `/consensus/task-proof`.
-2. Elects a high-stake, high-throughput node as task-proof leader and aggregates submitted proofs.
+2. Elects a high-stake, high-throughput node as task-proof leader using task share aware weighting so under-served nodes gain additional chances to produce blocks.
 3. Converts validated proofs into `segment_receipt` + `payout` transactions, then appends staking reward payouts computed from `reward_bps`.
 4. Commits a new block with the collected transactions.
 5. Persists the ledger snapshot to `ledger_v35.json`.
 
-This HotStuff-Pro inspired loop runs as a single validator today, but the task-proof path mirrors a decentralized HotStuff-Pro deployment. Consensus rounds track cumulative throughput (`target_tokens_per_sec` defaults to 10,000,000) and can scale to 100,000,000 parallel nodes submitting proofs.
+This HotStuff-Pro inspired loop runs as a single validator today, but the task-proof path mirrors a decentralized HotStuff-Pro deployment. Consensus rounds track cumulative throughput (`target_tokens_per_sec` defaults to 10,000,000) and can scale to 100,000,000 parallel nodes submitting proofs. The ledger records how many task slots each node captures, keeps an average tasks-per-node benchmark, and penalizes leaders that have already claimed disproportionate work so scheduling and consensus remain decentralized as throughput increases.
 
 ## Persistence
 
