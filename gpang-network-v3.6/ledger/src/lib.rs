@@ -6,6 +6,7 @@
 //! operations funnel through [`Ledger::apply_transaction`] to provide a single
 //! entrypoint for token and reward accounting.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -20,9 +21,9 @@ use tracing::info;
 pub mod types;
 
 use types::{
-    Account, Block, ChatResponse, ContractEvent, LedgerState, ModelProfile, Node, NodeHardware,
-    NodeMetrics, Provider, ScheduledProvider, SmartContract, Task, TaskMode, TaskProof,
-    TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind, ZeroProof,
+    Account, Block, ChatResponse, ContractEvent, ContractRuntime, LedgerState, ModelProfile, Node,
+    NodeHardware, NodeMetrics, Provider, ScheduledProvider, SmartContract, Task, TaskMode,
+    TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind, ZeroProof,
 };
 
 /// Default scheme label for synthesized zero proofs.
@@ -687,12 +688,10 @@ impl Ledger {
                 name,
                 code,
                 metadata,
+                runtime,
+                program_id,
+                bytecode_b64,
             } => {
-                if code.trim().is_empty() {
-                    return Err(LedgerError::InvalidTransaction(
-                        "contract code cannot be empty".into(),
-                    ));
-                }
                 let mut id = contract_id.clone().unwrap_or_default();
                 if id.trim().is_empty() {
                     id = self.next_contract_identifier();
@@ -704,15 +703,83 @@ impl Ledger {
                 } else {
                     self.bump_contract_counter_from(&id);
                 }
-                let code_hash = Self::hash_components(&[&id, code]);
+
+                let mut source = code.clone().unwrap_or_default();
+                let mut bytecode = bytecode_b64.clone();
+                let mut normalized_program = program_id.clone();
+
+                match runtime {
+                    ContractRuntime::Native => {
+                        if source.trim().is_empty() {
+                            return Err(LedgerError::InvalidTransaction(
+                                "native contract code cannot be empty".into(),
+                            ));
+                        }
+                        normalized_program = None;
+                        bytecode = None;
+                    }
+                    ContractRuntime::Solana => {
+                        let provided = program_id.as_ref().ok_or_else(|| {
+                            LedgerError::InvalidTransaction(
+                                "solana deployments require program_id".into(),
+                            )
+                        })?;
+                        let trimmed = provided.trim();
+                        if trimmed.is_empty() {
+                            return Err(LedgerError::InvalidTransaction(
+                                "solana deployments require a non-empty program_id".into(),
+                            ));
+                        }
+                        normalized_program = Some(trimmed.to_string());
+                        if bytecode.is_none() {
+                            if source.trim().is_empty() {
+                                return Err(LedgerError::InvalidTransaction(
+                                    "solana deployments require base64 bytecode".into(),
+                                ));
+                            }
+                            bytecode = Some(source.clone());
+                            source.clear();
+                        }
+                        let encoded = bytecode
+                            .as_ref()
+                            .expect("bytecode ensured for solana deployments");
+                        if encoded.trim().is_empty() {
+                            return Err(LedgerError::InvalidTransaction(
+                                "solana bytecode cannot be empty".into(),
+                            ));
+                        }
+                        if BASE64.decode(encoded.as_bytes()).is_err() {
+                            return Err(LedgerError::InvalidTransaction(
+                                "solana bytecode must be valid base64".into(),
+                            ));
+                        }
+                    }
+                }
+
+                let material_ref = if matches!(runtime, ContractRuntime::Solana) {
+                    bytecode
+                        .as_ref()
+                        .map(|s| s.as_str())
+                        .unwrap_or_else(|| source.as_str())
+                } else {
+                    source.as_str()
+                };
+                let mut hash_parts: Vec<&str> = vec![id.as_str(), runtime.as_str(), material_ref];
+                if let Some(ref pid) = normalized_program {
+                    hash_parts.push(pid.as_str());
+                }
+                let code_hash = Self::hash_components(&hash_parts);
                 let contract = SmartContract {
                     id: id.clone(),
                     owner: owner.clone(),
                     name: name.clone(),
-                    code: code.clone(),
+                    code: source.clone(),
                     code_hash,
                     metadata: metadata.clone(),
                     deployed_at: tx.timestamp,
+                    runtime: runtime.clone(),
+                    program_id: normalized_program.clone(),
+                    bytecode_b64: bytecode.clone(),
                 };
                 self.state.contracts.insert(id, contract);
                 self.get_or_create_account(owner);

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 /// Enumeration of all supported token denominations in the GPANG Network.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -11,6 +14,44 @@ pub enum TokenKind {
     WORK,
     /// Reward token for storage contributions.
     STOR,
+}
+
+/// Supported execution runtimes for smart contracts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractRuntime {
+    /// A native GPANG contract interpreted by the ledger itself.
+    Native,
+    /// A Solana BPF program deployed through GPANG.
+    Solana,
+}
+
+impl Default for ContractRuntime {
+    fn default() -> Self {
+        Self::Native
+    }
+}
+
+impl ContractRuntime {
+    /// Canonical string label for the runtime.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContractRuntime::Native => "native",
+            ContractRuntime::Solana => "solana",
+        }
+    }
+}
+
+impl FromStr for ContractRuntime {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "native" => Ok(Self::Native),
+            "solana" => Ok(Self::Solana),
+            other => Err(format!("unsupported contract runtime: {}", other)),
+        }
+    }
 }
 
 /// A high level description of a transaction payload.
@@ -76,9 +117,16 @@ pub enum TransactionKind {
         #[serde(default)]
         contract_id: Option<String>,
         name: String,
-        code: String,
+        #[serde(default)]
+        code: Option<String>,
         #[serde(default)]
         metadata: Option<String>,
+        #[serde(default)]
+        runtime: ContractRuntime,
+        #[serde(default)]
+        program_id: Option<String>,
+        #[serde(default)]
+        bytecode_b64: Option<String>,
     },
     /// Executes a smart contract method while recording the payload immutably.
     ExecuteContract {
@@ -437,6 +485,12 @@ pub struct SmartContract {
     pub code_hash: String,
     pub metadata: Option<String>,
     pub deployed_at: u64,
+    #[serde(default)]
+    pub runtime: ContractRuntime,
+    #[serde(default)]
+    pub program_id: Option<String>,
+    #[serde(default)]
+    pub bytecode_b64: Option<String>,
 }
 
 /// Immutable execution log emitted whenever a contract runs.
@@ -605,6 +659,9 @@ impl LedgerState {
             code_hash: "foundation-airdrop-demo".to_string(),
             metadata: Some("distributes welcome rewards".to_string()),
             deployed_at: timestamp,
+            runtime: ContractRuntime::Native,
+            program_id: None,
+            bytecode_b64: None,
         };
         state.next_contract_id = 2;
         state

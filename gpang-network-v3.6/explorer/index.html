@@ -102,7 +102,10 @@
               <th class="px-4 py-2 text-left">ID</th>
               <th class="px-4 py-2 text-left">Owner</th>
               <th class="px-4 py-2 text-left">Name</th>
+              <th class="px-4 py-2 text-left">Runtime</th>
+              <th class="px-4 py-2 text-left">Program ID</th>
               <th class="px-4 py-2 text-left">Code Hash</th>
+              <th class="px-4 py-2 text-left">Bytecode</th>
               <th class="px-4 py-2 text-left">Deployed At</th>
               <th class="px-4 py-2 text-left">Metadata</th>
             </tr>
@@ -364,12 +367,20 @@
           const deployed = contract.deployed_at
             ? new Date(contract.deployed_at).toLocaleString()
             : 'n/a';
+          const runtime = contract.runtime || 'native';
+          const programId = contract.program_id || '-';
+          const bytecodeState = contract.bytecode_b64
+            ? `Yes (${contract.bytecode_b64.length} chars)`
+            : 'No';
           return `
             <tr class="border-b border-gray-700">
               <td class="px-4 py-2">${contract.id}</td>
               <td class="px-4 py-2">${contract.owner}</td>
               <td class="px-4 py-2">${contract.name || '-'}</td>
+              <td class="px-4 py-2 uppercase">${runtime}</td>
+              <td class="px-4 py-2 text-sm break-all">${programId}</td>
               <td class="px-4 py-2 text-sm">${contract.code_hash}</td>
+              <td class="px-4 py-2">${bytecodeState}</td>
               <td class="px-4 py-2">${deployed}</td>
               <td class="px-4 py-2 text-sm">${escapeHtml(contract.metadata || '-')}</td>
             </tr>

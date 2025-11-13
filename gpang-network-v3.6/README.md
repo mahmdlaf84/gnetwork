@@ -141,6 +141,15 @@ Deploy and exercise a smart contract:
   --code "fn distribute() { /* demo */ }" \
   --metadata '{"description":"genesis faucet"}'
 
+# Deploy a Solana BPF program (bytecode is base64-encoded automatically)
+./scripts/gpang contract deploy \
+  --owner foundation \
+  --name solana-router \
+  --runtime solana \
+  --program-id 3nmyD5Zb9WJ6A3W5v1VXnMqJ8C8Yg4k5tA8W9rUu1xYg \
+  --bytecode-path ./artifacts/solana_router.so \
+  --metadata '{"description":"bridges Solana-native flows"}'
+
 # Invoke the contract with an immutable payload
 ./scripts/gpang contract execute \
   --contract-id contract-1 \

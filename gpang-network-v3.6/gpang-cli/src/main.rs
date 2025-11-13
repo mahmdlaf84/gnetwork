@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
 use ledger::types::{
-    ModelProfile, NodeHardware, NodeMetrics, TaskMode, TokenKind, TransactionKind,
+    ContractRuntime, ModelProfile, NodeHardware, NodeMetrics, TaskMode, TokenKind, TransactionKind,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -237,6 +238,18 @@ struct DeployContractArgs {
     /// Optional metadata payload stored alongside the contract
     #[arg(long)]
     metadata: Option<String>,
+    /// Target runtime for the contract (native or solana)
+    #[arg(long, default_value = "native")]
+    runtime: String,
+    /// Solana program identifier when deploying Solana BPF contracts
+    #[arg(long)]
+    program_id: Option<String>,
+    /// Path to a compiled Solana shared object for base64 encoding
+    #[arg(long)]
+    bytecode_path: Option<String>,
+    /// Inline base64-encoded bytecode payload for Solana contracts
+    #[arg(long)]
+    bytecode: Option<String>,
 }
 
 #[derive(Args)]
@@ -907,27 +920,89 @@ async fn handle_account(client: &Client, rpc: &str, cmd: AccountCommand) -> Resu
 async fn handle_contract(client: &Client, rpc: &str, cmd: ContractCommand) -> Result<()> {
     match cmd {
         ContractCommand::Deploy(mut args) => {
-            let source = match (args.code.take(), args.code_path.take()) {
-                (Some(inline), None) => inline,
-                (None, Some(path)) => fs::read_to_string(&path)
-                    .with_context(|| format!("failed to read contract file {}", path))?,
+            let runtime = ContractRuntime::from_str(&args.runtime).map_err(|err| anyhow!(err))?;
+            let mut source = match (args.code.take(), args.code_path.take()) {
+                (Some(inline), None) => Some(inline),
+                (None, Some(path)) => Some(
+                    fs::read_to_string(&path)
+                        .with_context(|| format!("failed to read contract file {}", path))?,
+                ),
                 (Some(_), Some(_)) => {
                     return Err(anyhow!(
                         "provide either --code or --code-path when deploying contracts"
                     ))
                 }
-                (None, None) => {
+                (None, None) => None,
+            };
+            let mut bytecode = match (args.bytecode.take(), args.bytecode_path.take()) {
+                (Some(inline), None) => Some(inline),
+                (None, Some(path)) => {
+                    let bytes = fs::read(&path)
+                        .with_context(|| format!("failed to read bytecode file {}", path))?;
+                    Some(BASE64.encode(bytes))
+                }
+                (Some(_), Some(_)) => {
                     return Err(anyhow!(
-                        "contract source required via --code or --code-path"
+                        "provide either --bytecode or --bytecode-path when deploying contracts"
                     ))
                 }
+                (None, None) => None,
             };
+            let mut program_id = args.program_id.clone();
+
+            match &runtime {
+                ContractRuntime::Native => {
+                    let src = source.as_ref().ok_or_else(|| {
+                        anyhow!(
+                            "native deployments require --code or --code-path to provide source"
+                        )
+                    })?;
+                    if src.trim().is_empty() {
+                        return Err(anyhow!("native contract code cannot be empty"));
+                    }
+                    program_id = None;
+                    bytecode = None;
+                }
+                ContractRuntime::Solana => {
+                    let provided = args
+                        .program_id
+                        .clone()
+                        .ok_or_else(|| anyhow!("solana deployments require --program-id"))?;
+                    let trimmed = provided.trim().to_string();
+                    if trimmed.is_empty() {
+                        return Err(anyhow!(
+                            "solana deployments require a non-empty --program-id"
+                        ));
+                    }
+                    program_id = Some(trimmed);
+                    if bytecode.is_none() {
+                        if let Some(src) = source.take() {
+                            bytecode = Some(src);
+                        }
+                    }
+                    let encoded = bytecode.as_ref().ok_or_else(|| {
+                        anyhow!(
+                            "solana deployments require --bytecode, --bytecode-path, or --code containing base64"
+                        )
+                    })?;
+                    if encoded.trim().is_empty() {
+                        return Err(anyhow!("solana bytecode cannot be empty"));
+                    }
+                    BASE64
+                        .decode(encoded.as_bytes())
+                        .context("solana bytecode must be valid base64")?;
+                }
+            }
+
             let kind = TransactionKind::DeployContract {
                 owner: args.owner,
                 contract_id: args.contract_id,
                 name: args.name,
                 code: source,
                 metadata: args.metadata,
+                runtime,
+                program_id,
+                bytecode_b64: bytecode,
             };
             send_transaction(client, rpc, kind).await?;
         }
