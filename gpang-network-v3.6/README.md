@@ -4,9 +4,9 @@ GPANG Network is a Rust-based prototype for a decentralized GPU marketplace with
 
 ## Workspace Layout
 
-- `ledger/` — Core state machine with token accounting, provider registry, task tracking, and JSON persistence helpers.
+- `ledger/` — Core state machine with token accounting, smart contract and token registries, provider catalogues, task tracking, and JSON persistence helpers.
 - `rpc/` — Axum-based REST API and task-proof consensus loop producing blocks every 3 seconds.
-- `gpang-cli/` — Command line tool for managing providers, nodes, accounts, and submitting tasks.
+- `gpang-cli/` — Command line tool for managing providers, nodes, accounts, contracts, custom tokens, treasury flows, and submitting tasks.
 - `explorer/` — Static HTML/Tailwind dashboard that consumes the REST API for network visibility.
 - `scripts/` — Convenience scripts, including `start-node.sh` for launching the RPC node.
 - `ledger_v35.json` — On-disk ledger snapshot used by the node and CLI.
@@ -131,6 +131,44 @@ Mint tokens and stake:
 ./scripts/gpang account stake --owner alice --amount 50000
 ```
 
+Deploy and exercise a smart contract:
+
+```bash
+# Deploy inline code (or use --code-path to read from disk)
+./scripts/gpang contract deploy \
+  --owner foundation \
+  --name welcome-airdrop \
+  --code "fn distribute() { /* demo */ }" \
+  --metadata '{"description":"genesis faucet"}'
+
+# Invoke the contract with an immutable payload
+./scripts/gpang contract execute \
+  --contract-id contract-1 \
+  --caller alice \
+  --method distribute \
+  --payload '{"target":"new-node"}'
+```
+
+Create a platform-wide token, mint supply, and route balances through the treasury:
+
+```bash
+./scripts/gpang token create \
+  --symbol GPANGX \
+  --name "GPANG Expansion" \
+  --owner foundation \
+  --initial-supply 1000000000 \
+  --platform true
+
+./scripts/gpang token mint \
+  --symbol BLDR \
+  --to builder \
+  --amount 5000000 \
+  --authority builder
+
+./scripts/gpang treasury deposit --from builder --symbol BLDR --amount 100000
+./scripts/gpang treasury withdraw --to alice --symbol AIA --amount 25000 --authority alice
+```
+
 ## Gas Accounting & Zero-Proof Validation
 
 - **Universal gas metering** — Every transaction now consumes intrinsic gas units that reflect its execution complexity (e.g. transfers cost 25,000 units, task-proof commits cost 55,000 units). The RPC layer estimates the limit automatically, but advanced operators can override `gas_price`, `gas_limit`, or `gas_payer` when calling the JSON API. Ensure the payer holds at least `gas_price * intrinsic_gas` AIA before submitting very small transactions (minting credits the balance first, then deducts gas).
@@ -138,9 +176,15 @@ Mint tokens and stake:
 - **Deterministic zero proofs** — Each transaction carries a `zero_proof` object that hashes the payload, gas metadata, and payer into a deterministic digest. The ledger re-computes and verifies this digest before accepting a transaction, providing lightweight tamper detection without external cryptography libraries.
 - **Automatic payer inference** — By default the RPC service infers a payer (e.g. `from` on transfers, provider owners on segment receipts) so CLI users are not forced to pass extra flags, while power users can still provide explicit overrides for multi-account workflows.
 
+## Smart Contracts, Custom Tokens & Treasury Controls
+
+- **Immutable contract registry** — Users can deploy arbitrary smart contract source via `contract deploy`. The ledger persists the code, metadata, and hash alongside a deterministic identifier and exposes `/contracts` plus `/contracts/events` so explorers can audit execution history. Every invocation emits an immutable event with the payload digest, preserving tamper evidence for task-proof consensus.
+- **Token factory with platform support** — `token create` registers fungible assets with configurable decimals, optional platform status, and optional linkage to a contract. Platform tokens automatically fund the treasury, while community tokens credit the issuer. Minting requires the recorded owner as authority so supplies remain provably controlled.
+- **Treasury deposits and withdrawals** — The treasury tracks balances for built-in and custom tokens. Operators can push rewards into reserves (`treasury deposit`) and withdraw under stake- or owner-based authorization (`treasury withdraw`). The explorer exposes aggregate balances, while the ledger enforces stake-backed approvals for native assets and owner checks for custom ones.
+
 ## Explorer
 
-Open `explorer/index.html` in a browser. The dashboard polls the REST API every 5 seconds to visualize blocks, providers, nodes, tasks, and treasury balances.
+Open `explorer/index.html` in a browser. The dashboard polls the REST API every 5 seconds to visualize blocks, providers, nodes, tasks, smart contracts, token registries, and treasury balances.
 
 ## REST API Overview
 
@@ -150,6 +194,9 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 - `GET /providers` — Provider registry
 - `GET /nodes` — Registered nodes
 - `GET /tasks` — Task ledger
+- `GET /contracts` — Smart contract registry and metadata
+- `GET /contracts/events` — Immutable execution log entries
+- `GET /tokens` — Custom and platform token definitions
 - `GET /treasury` — Treasury balances
 - `POST /tx` — Submit any token transaction (`TransactionKind` payload plus optional `gas_price`, `gas_limit`, `gas_payer` overrides)
 - `POST /provider/upsert` — Register or update provider metadata

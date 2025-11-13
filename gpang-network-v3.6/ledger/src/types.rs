@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 /// Enumeration of all supported token denominations in the GPANG Network.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -69,6 +70,63 @@ pub enum TransactionKind {
     TaskProofCommit {
         proof: TaskProof,
     },
+    /// Deploys a new smart contract onto the chain.
+    DeployContract {
+        owner: String,
+        #[serde(default)]
+        contract_id: Option<String>,
+        name: String,
+        code: String,
+        #[serde(default)]
+        metadata: Option<String>,
+    },
+    /// Executes a smart contract method while recording the payload immutably.
+    ExecuteContract {
+        contract_id: String,
+        caller: String,
+        method: String,
+        #[serde(default)]
+        payload: Value,
+    },
+    /// Creates a new fungible token definition.
+    CreateToken {
+        symbol: String,
+        name: String,
+        decimals: u8,
+        initial_supply: u64,
+        owner: String,
+        #[serde(default)]
+        platform: bool,
+        #[serde(default)]
+        contract_id: Option<String>,
+    },
+    /// Mints additional supply for a custom token under owner authority.
+    MintCustom {
+        symbol: String,
+        to: String,
+        amount: u64,
+        authority: String,
+    },
+    /// Transfers custom token balances between accounts.
+    TransferCustom {
+        symbol: String,
+        from: String,
+        to: String,
+        amount: u64,
+    },
+    /// Deposits assets directly into the treasury.
+    TreasuryDeposit {
+        from: String,
+        symbol: String,
+        amount: u64,
+    },
+    /// Withdraws assets from the treasury when authorized.
+    TreasuryWithdraw {
+        to: String,
+        symbol: String,
+        amount: u64,
+        authority: String,
+    },
 }
 
 /// Transaction wrapper storing metadata.
@@ -133,6 +191,8 @@ pub struct Account {
     pub stake_balance: u64,
     pub total_earnings: u64,
     pub total_costs: u64,
+    #[serde(default)]
+    pub custom_tokens: HashMap<String, u64>,
 }
 
 impl Account {
@@ -145,6 +205,7 @@ impl Account {
             stake_balance: 0,
             total_earnings: 0,
             total_costs: 0,
+            custom_tokens: HashMap::new(),
         }
     }
 }
@@ -335,6 +396,8 @@ pub struct Treasury {
     pub reward_bps: u64,
     pub low_tier_discount_bps: u64,
     pub gas_collected: u64,
+    #[serde(default)]
+    pub custom_tokens: HashMap<String, u64>,
 }
 
 impl Default for Treasury {
@@ -347,6 +410,7 @@ impl Default for Treasury {
             reward_bps: 200,
             low_tier_discount_bps: 1000,
             gas_collected: 0,
+            custom_tokens: HashMap::new(),
         }
     }
 }
@@ -361,6 +425,43 @@ impl Treasury {
             ..Self::default()
         }
     }
+}
+
+/// Metadata describing a deployed smart contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartContract {
+    pub id: String,
+    pub owner: String,
+    pub name: String,
+    pub code: String,
+    pub code_hash: String,
+    pub metadata: Option<String>,
+    pub deployed_at: u64,
+}
+
+/// Immutable execution log emitted whenever a contract runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractEvent {
+    pub id: String,
+    pub contract_id: String,
+    pub caller: String,
+    pub method: String,
+    pub payload: Value,
+    pub payload_hash: String,
+    pub timestamp: u64,
+}
+
+/// Definition of a fungible token deployed by the network or users.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenDefinition {
+    pub symbol: String,
+    pub name: String,
+    pub decimals: u8,
+    pub total_supply: u128,
+    pub owner: String,
+    pub platform: bool,
+    pub created_at: u64,
+    pub contract_id: Option<String>,
 }
 
 /// Proof emitted by providers to participate in task-proof consensus.
@@ -429,6 +530,16 @@ pub struct LedgerState {
     pub next_node_id: u64,
     pub pending_task_proofs: Vec<TaskProof>,
     pub network_capacity: NetworkCapacity,
+    #[serde(default)]
+    pub contracts: HashMap<String, SmartContract>,
+    #[serde(default)]
+    pub contract_events: Vec<ContractEvent>,
+    #[serde(default)]
+    pub token_definitions: HashMap<String, TokenDefinition>,
+    #[serde(default = "default_next_contract_id")]
+    pub next_contract_id: u64,
+    #[serde(default)]
+    pub platform_tokens: HashSet<String>,
 }
 
 impl Default for LedgerState {
@@ -444,11 +555,20 @@ impl Default for LedgerState {
             next_node_id: 1,
             pending_task_proofs: Vec::new(),
             network_capacity: NetworkCapacity::default(),
+            contracts: HashMap::new(),
+            contract_events: Vec::new(),
+            token_definitions: HashMap::new(),
+            next_contract_id: 1,
+            platform_tokens: HashSet::new(),
         }
     }
 }
 
 fn default_next_node_id() -> u64 {
+    1
+}
+
+fn default_next_contract_id() -> u64 {
     1
 }
 
@@ -475,6 +595,70 @@ impl LedgerState {
         validator.stake_balance = 100_000_000_000;
         validator.total_earnings = validator.aia_balance;
         state.accounts.insert(validator.id.clone(), validator);
+
+        // Seed a reference contract so explorers can highlight smart contract support.
+        let demo_contract = SmartContract {
+            id: "contract-1".to_string(),
+            owner: "foundation".to_string(),
+            name: "foundation-airdrop".to_string(),
+            code: "fn distribute() { /* demo */ }".to_string(),
+            code_hash: "foundation-airdrop-demo".to_string(),
+            metadata: Some("distributes welcome rewards".to_string()),
+            deployed_at: timestamp,
+        };
+        state.next_contract_id = 2;
+        state
+            .contracts
+            .insert(demo_contract.id.clone(), demo_contract.clone());
+
+        let platform_token = TokenDefinition {
+            symbol: "GPANGP".to_string(),
+            name: "GPANG Platform".to_string(),
+            decimals: 9,
+            total_supply: 10_000_000_000_000,
+            owner: "foundation".to_string(),
+            platform: true,
+            created_at: timestamp,
+            contract_id: Some("contract-1".to_string()),
+        };
+        state
+            .treasury
+            .custom_tokens
+            .insert(platform_token.symbol.clone(), 10_000_000_000_000);
+        state.platform_tokens.insert(platform_token.symbol.clone());
+        state
+            .token_definitions
+            .insert(platform_token.symbol.clone(), platform_token.clone());
+
+        let builder_token = TokenDefinition {
+            symbol: "BLDR".to_string(),
+            name: "Builder Reward".to_string(),
+            decimals: 6,
+            total_supply: 1_000_000_000,
+            owner: "builder".to_string(),
+            platform: false,
+            created_at: timestamp,
+            contract_id: None,
+        };
+        if let Some(account) = state.accounts.get_mut("builder") {
+            account.custom_tokens.insert(
+                builder_token.symbol.clone(),
+                builder_token.total_supply as u64,
+            );
+        }
+        state
+            .token_definitions
+            .insert(builder_token.symbol.clone(), builder_token.clone());
+
+        state.contract_events.push(ContractEvent {
+            id: "event-1".to_string(),
+            contract_id: "contract-1".to_string(),
+            caller: "foundation".to_string(),
+            method: "distribute".to_string(),
+            payload: Value::String("genesis invocation".to_string()),
+            payload_hash: "foundation-airdrop-event".to_string(),
+            timestamp,
+        });
 
         let profile_flagship = ModelProfile {
             model_id: "qwen2.5-7b".to_string(),

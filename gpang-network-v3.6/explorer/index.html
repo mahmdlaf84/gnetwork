@@ -94,6 +94,65 @@
     </section>
 
     <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Smart Contracts</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Name</th>
+              <th class="px-4 py-2 text-left">Code Hash</th>
+              <th class="px-4 py-2 text-left">Deployed At</th>
+              <th class="px-4 py-2 text-left">Metadata</th>
+            </tr>
+          </thead>
+          <tbody id="contracts"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Contract Activity</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Event</th>
+              <th class="px-4 py-2 text-left">Contract</th>
+              <th class="px-4 py-2 text-left">Caller</th>
+              <th class="px-4 py-2 text-left">Method</th>
+              <th class="px-4 py-2 text-left">Payload Hash</th>
+              <th class="px-4 py-2 text-left">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody id="contract-events"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Token Registry</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Symbol</th>
+              <th class="px-4 py-2 text-left">Name</th>
+              <th class="px-4 py-2 text-left">Decimals</th>
+              <th class="px-4 py-2 text-left">Total Supply</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Platform</th>
+              <th class="px-4 py-2 text-left">Contract</th>
+              <th class="px-4 py-2 text-left">Created</th>
+            </tr>
+          </thead>
+          <tbody id="tokens"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
       <h2 class="text-2xl font-semibold mb-2">Treasury</h2>
       <div id="treasury" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
     </section>
@@ -138,6 +197,10 @@
               ? summary.average_tasks_per_node.toFixed(2)
               : '0.00',
         },
+        { label: 'Contracts', value: number(summary.total_contracts) },
+        { label: 'Token Definitions', value: number(summary.total_custom_tokens) },
+        { label: 'Platform Tokens', value: number(summary.platform_token_count) },
+        { label: 'Contract Events', value: number(summary.contract_events) },
       ];
       document.getElementById('summary').innerHTML = cards
         .map(
@@ -295,12 +358,92 @@
       document.getElementById('tasks').innerHTML = rows;
     }
 
+    function renderContracts(contracts) {
+      const rows = contracts
+        .map((contract) => {
+          const deployed = contract.deployed_at
+            ? new Date(contract.deployed_at).toLocaleString()
+            : 'n/a';
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${contract.id}</td>
+              <td class="px-4 py-2">${contract.owner}</td>
+              <td class="px-4 py-2">${contract.name || '-'}</td>
+              <td class="px-4 py-2 text-sm">${contract.code_hash}</td>
+              <td class="px-4 py-2">${deployed}</td>
+              <td class="px-4 py-2 text-sm">${escapeHtml(contract.metadata || '-')}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('contracts').innerHTML = rows;
+    }
+
+    function renderContractEvents(events) {
+      const rows = events
+        .slice(-25)
+        .reverse()
+        .map((event) => {
+          const timestamp = event.timestamp
+            ? new Date(event.timestamp).toLocaleString()
+            : 'n/a';
+          const payload = escapeHtml(
+            JSON.stringify(event.payload || {}, null, 0).slice(0, 120)
+          );
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${event.id}</td>
+              <td class="px-4 py-2">${event.contract_id}</td>
+              <td class="px-4 py-2">${event.caller}</td>
+              <td class="px-4 py-2">${event.method}</td>
+              <td class="px-4 py-2 text-sm leading-5">${event.payload_hash}<br/><span class="text-gray-400">${payload}</span></td>
+              <td class="px-4 py-2">${timestamp}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('contract-events').innerHTML = rows;
+    }
+
+    function renderTokens(tokens) {
+      const rows = tokens
+        .map((token) => {
+          const created = token.created_at
+            ? new Date(token.created_at).toLocaleString()
+            : 'n/a';
+          const contract = token.contract_id || '-';
+          const supply = typeof token.total_supply === 'number'
+            ? token.total_supply.toLocaleString()
+            : Number(token.total_supply || 0).toLocaleString();
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${token.symbol}</td>
+              <td class="px-4 py-2">${token.name}</td>
+              <td class="px-4 py-2">${token.decimals}</td>
+              <td class="px-4 py-2">${supply}</td>
+              <td class="px-4 py-2">${token.owner}</td>
+              <td class="px-4 py-2">${token.platform ? 'Yes' : 'No'}</td>
+              <td class="px-4 py-2">${contract}</td>
+              <td class="px-4 py-2">${created}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('tokens').innerHTML = rows;
+    }
+
     function renderTreasury(treasury) {
       const cards = [
         { label: 'AIA Balance', value: treasury.aia_balance },
         { label: 'WORK Balance', value: treasury.work_balance },
         { label: 'STOR Balance', value: treasury.stor_balance },
       ];
+      const custom = treasury.custom_tokens || {};
+      Object.keys(custom)
+        .sort()
+        .forEach((symbol) => {
+          cards.push({ label: `Custom ${symbol}`, value: custom[symbol] });
+        });
       document.getElementById('treasury').innerHTML = cards
         .map(
           (card) => `
@@ -315,19 +458,35 @@
 
     async function refresh() {
       try {
-        const [summary, blocks, providers, nodes, tasks, treasury] = await Promise.all([
+        const [
+          summary,
+          blocks,
+          providers,
+          nodes,
+          tasks,
+          treasury,
+          contracts,
+          contractEvents,
+          tokens,
+        ] = await Promise.all([
           fetchJson('/'),
           fetchJson('/blocks'),
           fetchJson('/providers'),
           fetchJson('/nodes'),
           fetchJson('/tasks'),
           fetchJson('/treasury'),
+          fetchJson('/contracts'),
+          fetchJson('/contracts/events'),
+          fetchJson('/tokens'),
         ]);
         renderSummary(summary);
         renderBlocks(blocks);
         renderProviders(providers);
         renderNodes(nodes);
         renderTasks(tasks);
+        renderContracts(contracts);
+        renderContractEvents(contractEvents);
+        renderTokens(tokens);
         renderTreasury(treasury);
       } catch (err) {
         console.error('Failed to refresh explorer', err);

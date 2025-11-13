@@ -10,7 +10,9 @@
     "stor_balance": 0,
     "fee_bps": 500,
     "reward_bps": 200,
-    "low_tier_discount_bps": 1000
+    "low_tier_discount_bps": 1000,
+    "gas_collected": 0,
+    "custom_tokens": {}
   },
   "next_task_id": 1,
   "next_node_id": 1,
@@ -23,5 +25,10 @@
     "peak_observed_tokens_per_sec": 0,
     "total_task_slots": 0,
     "average_tasks_per_node": 0.0
-  }
+  },
+  "contracts": {},
+  "contract_events": [],
+  "token_definitions": {},
+  "next_contract_id": 1,
+  "platform_tokens": []
 }

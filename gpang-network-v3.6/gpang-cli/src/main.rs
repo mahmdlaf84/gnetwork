@@ -8,6 +8,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    fs,
     hash::{Hash, Hasher},
     process::Command,
     str::FromStr,
@@ -37,6 +38,12 @@ enum Commands {
     Task(TaskCommand),
     /// Account level token operations
     Account(AccountCommand),
+    /// Manage on-chain smart contracts
+    Contract(ContractCommand),
+    /// Manage custom and platform tokens
+    Token(TokenCommand),
+    /// Treasury movements
+    Treasury(TreasuryCommand),
     /// Simple network status helpers
     Status,
 }
@@ -202,6 +209,123 @@ enum AccountCommand {
     },
     /// Stake AIA into the consensus set
     Stake { owner: String, amount: u64 },
+}
+
+#[derive(Subcommand)]
+enum ContractCommand {
+    /// Deploy a new smart contract to the chain
+    Deploy(DeployContractArgs),
+    /// Execute a contract method and record the payload
+    Execute(ExecuteContractArgs),
+}
+
+#[derive(Args)]
+struct DeployContractArgs {
+    #[arg(long)]
+    owner: String,
+    #[arg(long)]
+    name: String,
+    /// Inline source code for the contract (mutually exclusive with code_path)
+    #[arg(long)]
+    code: Option<String>,
+    /// Path to a file containing the contract source
+    #[arg(long)]
+    code_path: Option<String>,
+    /// Optional explicit identifier; otherwise the ledger allocates one
+    #[arg(long)]
+    contract_id: Option<String>,
+    /// Optional metadata payload stored alongside the contract
+    #[arg(long)]
+    metadata: Option<String>,
+}
+
+#[derive(Args)]
+struct ExecuteContractArgs {
+    #[arg(long)]
+    contract_id: String,
+    #[arg(long)]
+    caller: String,
+    #[arg(long)]
+    method: String,
+    /// JSON payload passed into the contract runtime
+    #[arg(long)]
+    payload: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// Create a new fungible token definition
+    Create(CreateTokenArgs),
+    /// Mint additional custom token supply
+    Mint(MintTokenArgs),
+    /// Transfer balances of a custom token
+    Transfer(TransferCustomTokenArgs),
+}
+
+#[derive(Args)]
+struct CreateTokenArgs {
+    #[arg(long)]
+    symbol: String,
+    #[arg(long)]
+    name: String,
+    #[arg(long, default_value_t = 9)]
+    decimals: u8,
+    #[arg(long, default_value_t = 0)]
+    initial_supply: u64,
+    #[arg(long)]
+    owner: String,
+    #[arg(long, default_value_t = false)]
+    platform: bool,
+    #[arg(long)]
+    contract_id: Option<String>,
+}
+
+#[derive(Args)]
+struct MintTokenArgs {
+    #[arg(long)]
+    symbol: String,
+    #[arg(long)]
+    to: String,
+    #[arg(long)]
+    amount: u64,
+    #[arg(long)]
+    authority: String,
+}
+
+#[derive(Args)]
+struct TransferCustomTokenArgs {
+    #[arg(long)]
+    symbol: String,
+    #[arg(long)]
+    from: String,
+    #[arg(long)]
+    to: String,
+    #[arg(long)]
+    amount: u64,
+}
+
+#[derive(Subcommand)]
+enum TreasuryCommand {
+    /// Move user funds into the treasury reserves
+    Deposit {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        symbol: String,
+        #[arg(long)]
+        amount: u64,
+    },
+    /// Release treasury funds to an account
+    Withdraw {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        symbol: String,
+        #[arg(long)]
+        amount: u64,
+        #[arg(long)]
+        authority: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -513,6 +637,9 @@ async fn main() -> Result<()> {
         Commands::Node(cmd) => handle_node(&client, &cli.rpc, cmd).await?,
         Commands::Task(cmd) => handle_task(&client, &cli.rpc, cmd).await?,
         Commands::Account(cmd) => handle_account(&client, &cli.rpc, cmd).await?,
+        Commands::Contract(cmd) => handle_contract(&client, &cli.rpc, cmd).await?,
+        Commands::Token(cmd) => handle_token(&client, &cli.rpc, cmd).await?,
+        Commands::Treasury(cmd) => handle_treasury(&client, &cli.rpc, cmd).await?,
         Commands::Status => print_status(&client, &cli.rpc).await?,
     }
 
@@ -772,6 +899,119 @@ async fn handle_account(client: &Client, rpc: &str, cmd: AccountCommand) -> Resu
         }
         AccountCommand::Stake { owner, amount } => {
             send_transaction(client, rpc, TransactionKind::Stake { owner, amount }).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_contract(client: &Client, rpc: &str, cmd: ContractCommand) -> Result<()> {
+    match cmd {
+        ContractCommand::Deploy(mut args) => {
+            let source = match (args.code.take(), args.code_path.take()) {
+                (Some(inline), None) => inline,
+                (None, Some(path)) => fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read contract file {}", path))?,
+                (Some(_), Some(_)) => {
+                    return Err(anyhow!(
+                        "provide either --code or --code-path when deploying contracts"
+                    ))
+                }
+                (None, None) => {
+                    return Err(anyhow!(
+                        "contract source required via --code or --code-path"
+                    ))
+                }
+            };
+            let kind = TransactionKind::DeployContract {
+                owner: args.owner,
+                contract_id: args.contract_id,
+                name: args.name,
+                code: source,
+                metadata: args.metadata,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+        ContractCommand::Execute(args) => {
+            let payload = if let Some(body) = args.payload {
+                serde_json::from_str(&body).context("invalid JSON payload")?
+            } else {
+                Value::Null
+            };
+            let kind = TransactionKind::ExecuteContract {
+                contract_id: args.contract_id,
+                caller: args.caller,
+                method: args.method,
+                payload,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_token(client: &Client, rpc: &str, cmd: TokenCommand) -> Result<()> {
+    match cmd {
+        TokenCommand::Create(args) => {
+            let kind = TransactionKind::CreateToken {
+                symbol: args.symbol.to_ascii_uppercase(),
+                name: args.name,
+                decimals: args.decimals,
+                initial_supply: args.initial_supply,
+                owner: args.owner,
+                platform: args.platform,
+                contract_id: args.contract_id,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+        TokenCommand::Mint(args) => {
+            let kind = TransactionKind::MintCustom {
+                symbol: args.symbol.to_ascii_uppercase(),
+                to: args.to,
+                amount: args.amount,
+                authority: args.authority,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+        TokenCommand::Transfer(args) => {
+            let kind = TransactionKind::TransferCustom {
+                symbol: args.symbol.to_ascii_uppercase(),
+                from: args.from,
+                to: args.to,
+                amount: args.amount,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_treasury(client: &Client, rpc: &str, cmd: TreasuryCommand) -> Result<()> {
+    match cmd {
+        TreasuryCommand::Deposit {
+            from,
+            symbol,
+            amount,
+        } => {
+            let kind = TransactionKind::TreasuryDeposit {
+                from,
+                symbol: symbol.to_ascii_uppercase(),
+                amount,
+            };
+            send_transaction(client, rpc, kind).await?;
+        }
+        TreasuryCommand::Withdraw {
+            to,
+            symbol,
+            amount,
+            authority,
+        } => {
+            let kind = TransactionKind::TreasuryWithdraw {
+                to,
+                symbol: symbol.to_ascii_uppercase(),
+                amount,
+                authority,
+            };
+            send_transaction(client, rpc, kind).await?;
         }
     }
     Ok(())

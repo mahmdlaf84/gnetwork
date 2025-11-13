@@ -20,9 +20,9 @@ use tracing::info;
 pub mod types;
 
 use types::{
-    Account, Block, ChatResponse, LedgerState, ModelProfile, Node, NodeHardware, NodeMetrics,
-    Provider, ScheduledProvider, Task, TaskMode, TaskProof, TaskSegment, TokenKind, Transaction,
-    TransactionKind, ZeroProof,
+    Account, Block, ChatResponse, ContractEvent, LedgerState, ModelProfile, Node, NodeHardware,
+    NodeMetrics, Provider, ScheduledProvider, SmartContract, Task, TaskMode, TaskProof,
+    TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind, ZeroProof,
 };
 
 /// Default scheme label for synthesized zero proofs.
@@ -54,6 +54,13 @@ pub fn intrinsic_gas_cost(kind: &TransactionKind) -> u64 {
         TransactionKind::SegmentReceipt { .. } => 40_000,
         TransactionKind::ChatResult { .. } => 36_000,
         TransactionKind::TaskProofCommit { .. } => 55_000,
+        TransactionKind::DeployContract { .. } => 120_000,
+        TransactionKind::ExecuteContract { .. } => 65_000,
+        TransactionKind::CreateToken { .. } => 110_000,
+        TransactionKind::MintCustom { .. } => 42_000,
+        TransactionKind::TransferCustom { .. } => 32_000,
+        TransactionKind::TreasuryDeposit { .. } => 30_000,
+        TransactionKind::TreasuryWithdraw { .. } => 45_000,
     }
 }
 
@@ -128,6 +135,12 @@ pub enum LedgerError {
     ProviderNotFound(String),
     #[error("node {0} not found")]
     NodeNotFound(String),
+    #[error("token {0} not found")]
+    TokenNotFound(String),
+    #[error("contract {0} not found")]
+    ContractNotFound(String),
+    #[error("forbidden operation: {0}")]
+    Forbidden(String),
     #[error("transaction validation error: {0}")]
     InvalidTransaction(String),
 }
@@ -220,6 +233,144 @@ impl Ledger {
         }
         *balance = new_value as u64;
         Ok(())
+    }
+
+    fn canonical_symbol(symbol: &str) -> String {
+        symbol.trim().to_ascii_uppercase()
+    }
+
+    fn is_builtin_symbol(symbol: &str) -> Option<TokenKind> {
+        match symbol {
+            "AIA" => Some(TokenKind::AIA),
+            "WORK" => Some(TokenKind::WORK),
+            "STOR" => Some(TokenKind::STOR),
+            _ => None,
+        }
+    }
+
+    fn adjust_custom_balance(
+        account: &mut Account,
+        symbol: &str,
+        delta: i128,
+    ) -> Result<(), LedgerError> {
+        let entry = account
+            .custom_tokens
+            .entry(Self::canonical_symbol(symbol))
+            .or_insert(0);
+        let new_value = *entry as i128 + delta;
+        if new_value < 0 {
+            return Err(LedgerError::InsufficientBalance(format!(
+                "{} for account {}",
+                symbol, account.id
+            )));
+        }
+        *entry = new_value as u64;
+        Ok(())
+    }
+
+    fn adjust_named_balance(
+        &mut self,
+        account: &mut Account,
+        symbol: &str,
+        delta: i128,
+    ) -> Result<(), LedgerError> {
+        if let Some(kind) = Self::is_builtin_symbol(symbol) {
+            Self::adjust_balance(account, &kind, delta)
+        } else {
+            if !self
+                .state
+                .token_definitions
+                .contains_key(&Self::canonical_symbol(symbol))
+            {
+                return Err(LedgerError::TokenNotFound(symbol.to_string()));
+            }
+            Self::adjust_custom_balance(account, symbol, delta)
+        }
+    }
+
+    fn adjust_treasury(&mut self, symbol: &str, delta: i128) -> Result<(), LedgerError> {
+        if let Some(kind) = Self::is_builtin_symbol(symbol) {
+            let balance = match kind {
+                TokenKind::AIA => &mut self.state.treasury.aia_balance,
+                TokenKind::WORK => &mut self.state.treasury.work_balance,
+                TokenKind::STOR => &mut self.state.treasury.stor_balance,
+            };
+            let new_value = *balance as i128 + delta;
+            if new_value < 0 {
+                return Err(LedgerError::InsufficientBalance(format!(
+                    "treasury {}",
+                    symbol
+                )));
+            }
+            *balance = new_value as u64;
+            Ok(())
+        } else {
+            let entry = self
+                .state
+                .treasury
+                .custom_tokens
+                .entry(Self::canonical_symbol(symbol))
+                .or_insert(0);
+            let new_value = *entry as i128 + delta;
+            if new_value < 0 {
+                return Err(LedgerError::InsufficientBalance(format!(
+                    "treasury {}",
+                    symbol
+                )));
+            }
+            *entry = new_value as u64;
+            Ok(())
+        }
+    }
+
+    fn token_definition(&self, symbol: &str) -> Result<&TokenDefinition, LedgerError> {
+        let key = Self::canonical_symbol(symbol);
+        self.state
+            .token_definitions
+            .get(&key)
+            .ok_or_else(|| LedgerError::TokenNotFound(symbol.to_string()))
+    }
+
+    fn token_definition_mut(&mut self, symbol: &str) -> Result<&mut TokenDefinition, LedgerError> {
+        let key = Self::canonical_symbol(symbol);
+        self.state
+            .token_definitions
+            .get_mut(&key)
+            .ok_or_else(|| LedgerError::TokenNotFound(symbol.to_string()))
+    }
+
+    fn next_contract_identifier(&mut self) -> String {
+        let id = format!("contract-{}", self.state.next_contract_id);
+        self.state.next_contract_id += 1;
+        id
+    }
+
+    fn bump_contract_counter_from(&mut self, contract_id: &str) {
+        if let Some(tail) = contract_id.strip_prefix("contract-") {
+            if let Ok(num) = tail.parse::<u64>() {
+                if num >= self.state.next_contract_id {
+                    self.state.next_contract_id = num + 1;
+                }
+            }
+        }
+    }
+
+    fn hash_components(parts: &[&str]) -> String {
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut hasher = DefaultHasher::new();
+        for part in parts {
+            part.hash(&mut hasher);
+        }
+        format!("{:016x}", hasher.finish())
+    }
+
+    fn record_contract_event(&mut self, mut event: ContractEvent) {
+        if event.id.is_empty() {
+            let idx = self.state.contract_events.len() as u64 + 1;
+            event.id = format!("event-{}-{}", event.contract_id, idx);
+        }
+        self.state.contract_events.push(event);
     }
 
     fn ensure_zero_proof(&self, tx: &Transaction) -> Result<(), LedgerError> {
@@ -529,6 +680,203 @@ impl Ledger {
             }
             TransactionKind::TaskProofCommit { proof } => {
                 self.record_task_proof(proof.clone())?;
+            }
+            TransactionKind::DeployContract {
+                owner,
+                contract_id,
+                name,
+                code,
+                metadata,
+            } => {
+                if code.trim().is_empty() {
+                    return Err(LedgerError::InvalidTransaction(
+                        "contract code cannot be empty".into(),
+                    ));
+                }
+                let mut id = contract_id.clone().unwrap_or_default();
+                if id.trim().is_empty() {
+                    id = self.next_contract_identifier();
+                } else if self.state.contracts.contains_key(&id) {
+                    return Err(LedgerError::InvalidTransaction(format!(
+                        "contract {} already exists",
+                        id
+                    )));
+                } else {
+                    self.bump_contract_counter_from(&id);
+                }
+                let code_hash = Self::hash_components(&[&id, code]);
+                let contract = SmartContract {
+                    id: id.clone(),
+                    owner: owner.clone(),
+                    name: name.clone(),
+                    code: code.clone(),
+                    code_hash,
+                    metadata: metadata.clone(),
+                    deployed_at: tx.timestamp,
+                };
+                self.state.contracts.insert(id, contract);
+                self.get_or_create_account(owner);
+            }
+            TransactionKind::ExecuteContract {
+                contract_id,
+                caller,
+                method,
+                payload,
+            } => {
+                if !self.state.contracts.contains_key(contract_id) {
+                    return Err(LedgerError::ContractNotFound(contract_id.clone()));
+                }
+                let payload_str =
+                    serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+                let payload_hash = Self::hash_components(&[contract_id, &payload_str, method]);
+                let event = ContractEvent {
+                    id: String::new(),
+                    contract_id: contract_id.clone(),
+                    caller: caller.clone(),
+                    method: method.clone(),
+                    payload: payload.clone(),
+                    payload_hash,
+                    timestamp: tx.timestamp,
+                };
+                self.record_contract_event(event);
+            }
+            TransactionKind::CreateToken {
+                symbol,
+                name,
+                decimals,
+                initial_supply,
+                owner,
+                platform,
+                contract_id,
+            } => {
+                let symbol = Self::canonical_symbol(symbol);
+                if Self::is_builtin_symbol(&symbol).is_some() {
+                    return Err(LedgerError::InvalidTransaction(
+                        "cannot redefine builtin token".into(),
+                    ));
+                }
+                if self.state.token_definitions.contains_key(&symbol) {
+                    return Err(LedgerError::InvalidTransaction(format!(
+                        "token {} already exists",
+                        symbol
+                    )));
+                }
+                if *decimals > 18 {
+                    return Err(LedgerError::InvalidTransaction(
+                        "decimals must be <= 18".into(),
+                    ));
+                }
+                if let Some(contract) = contract_id {
+                    if !self.state.contracts.contains_key(contract) {
+                        return Err(LedgerError::ContractNotFound(contract.clone()));
+                    }
+                }
+                let definition = TokenDefinition {
+                    symbol: symbol.clone(),
+                    name: name.clone(),
+                    decimals: *decimals,
+                    total_supply: *initial_supply as u128,
+                    owner: owner.clone(),
+                    platform: *platform,
+                    created_at: tx.timestamp,
+                    contract_id: contract_id.clone(),
+                };
+                self.state
+                    .token_definitions
+                    .insert(symbol.clone(), definition);
+                if *platform {
+                    self.state.platform_tokens.insert(symbol.clone());
+                    self.adjust_treasury(&symbol, *initial_supply as i128)?;
+                } else {
+                    let account = self.get_or_create_account(owner);
+                    Self::adjust_custom_balance(account, &symbol, *initial_supply as i128)?;
+                }
+                self.get_or_create_account(owner);
+            }
+            TransactionKind::MintCustom {
+                symbol,
+                to,
+                amount,
+                authority,
+            } => {
+                let symbol = Self::canonical_symbol(symbol);
+                let owner_id = {
+                    let definition = self.token_definition(&symbol)?;
+                    definition.owner.clone()
+                };
+                if &owner_id != authority {
+                    return Err(LedgerError::Forbidden(format!(
+                        "{} cannot mint {}",
+                        authority, symbol
+                    )));
+                }
+                let definition = self.token_definition_mut(&symbol)?;
+                definition.total_supply = definition.total_supply.saturating_add(*amount as u128);
+                let account = self.get_or_create_account(to);
+                Self::adjust_custom_balance(account, &symbol, *amount as i128)?;
+            }
+            TransactionKind::TransferCustom {
+                symbol,
+                from,
+                to,
+                amount,
+            } => {
+                let symbol = Self::canonical_symbol(symbol);
+                self.token_definition(&symbol)?;
+                let from_account = self.get_account(from)?;
+                Self::adjust_custom_balance(from_account, &symbol, -(*amount as i128))?;
+                let to_account = self.get_or_create_account(to);
+                Self::adjust_custom_balance(to_account, &symbol, *amount as i128)?;
+            }
+            TransactionKind::TreasuryDeposit {
+                from,
+                symbol,
+                amount,
+            } => {
+                let symbol = Self::canonical_symbol(symbol);
+                if let Some(kind) = Self::is_builtin_symbol(&symbol) {
+                    let account = self.get_account(from)?;
+                    Self::adjust_balance(account, &kind, -(*amount as i128))?;
+                    self.adjust_treasury(&symbol, *amount as i128)?;
+                } else {
+                    self.token_definition(&symbol)?;
+                    let account = self.get_account(from)?;
+                    Self::adjust_custom_balance(account, &symbol, -(*amount as i128))?;
+                    self.adjust_treasury(&symbol, *amount as i128)?;
+                }
+            }
+            TransactionKind::TreasuryWithdraw {
+                to,
+                symbol,
+                amount,
+                authority,
+            } => {
+                let symbol = Self::canonical_symbol(symbol);
+                if let Some(kind) = Self::is_builtin_symbol(&symbol) {
+                    let authority_account = self.get_account(authority)?;
+                    if authority_account.stake_balance == 0 {
+                        return Err(LedgerError::Forbidden(
+                            "treasury withdrawal requires staker authority".into(),
+                        ));
+                    }
+                    self.adjust_treasury(&symbol, -(*amount as i128))?;
+                    let to_account = self.get_or_create_account(to);
+                    Self::adjust_balance(to_account, &kind, *amount as i128)?;
+                } else {
+                    let owner_id = {
+                        let definition = self.token_definition(&symbol)?;
+                        definition.owner.clone()
+                    };
+                    if &owner_id != authority {
+                        return Err(LedgerError::Forbidden(format!(
+                            "{} cannot withdraw {} from treasury",
+                            authority, symbol
+                        )));
+                    }
+                    self.adjust_treasury(&symbol, -(*amount as i128))?;
+                    let to_account = self.get_or_create_account(to);
+                    Self::adjust_custom_balance(to_account, &symbol, *amount as i128)?;
+                }
             }
         }
         self.charge_gas(tx)?;
@@ -1100,6 +1448,10 @@ pub struct NetworkSummary {
     pub max_parallel_nodes: u64,
     pub total_task_slots: u128,
     pub average_tasks_per_node: f64,
+    pub total_contracts: usize,
+    pub total_custom_tokens: usize,
+    pub platform_token_count: usize,
+    pub contract_events: usize,
 }
 
 impl From<&LedgerState> for NetworkSummary {
@@ -1124,6 +1476,10 @@ impl From<&LedgerState> for NetworkSummary {
             max_parallel_nodes: state.network_capacity.max_parallel_nodes,
             total_task_slots: state.network_capacity.total_task_slots,
             average_tasks_per_node: state.network_capacity.average_tasks_per_node,
+            total_contracts: state.contracts.len(),
+            total_custom_tokens: state.token_definitions.len(),
+            platform_token_count: state.platform_tokens.len(),
+            contract_events: state.contract_events.len(),
         }
     }
 }

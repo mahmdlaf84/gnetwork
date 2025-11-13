@@ -74,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/providers", get(list_providers))
         .route("/nodes", get(list_nodes))
         .route("/tasks", get(list_tasks))
+        .route("/contracts", get(list_contracts))
+        .route("/contracts/events", get(list_contract_events))
+        .route("/tokens", get(list_tokens))
         .route("/treasury", get(get_treasury))
         .route("/tx", post(submit_transaction))
         .route("/provider/upsert", post(upsert_provider))
@@ -197,6 +200,21 @@ async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {
     Json(ledger.state.tasks.values().cloned().collect())
 }
 
+async fn list_contracts(State(state): State<AppState>) -> Json<Vec<SmartContract>> {
+    let ledger = state.ledger.lock().await;
+    Json(ledger.state.contracts.values().cloned().collect())
+}
+
+async fn list_contract_events(State(state): State<AppState>) -> Json<Vec<ContractEvent>> {
+    let ledger = state.ledger.lock().await;
+    Json(ledger.state.contract_events.clone())
+}
+
+async fn list_tokens(State(state): State<AppState>) -> Json<Vec<TokenDefinition>> {
+    let ledger = state.ledger.lock().await;
+    Json(ledger.state.token_definitions.values().cloned().collect())
+}
+
 async fn get_treasury(State(state): State<AppState>) -> Json<Treasury> {
     let ledger = state.ledger.lock().await;
     Json(ledger.state.treasury.clone())
@@ -245,6 +263,13 @@ fn infer_gas_payer(kind: &TransactionKind, ledger: &Ledger) -> Option<String> {
                 .map(|provider| provider.owner.clone())
                 .or_else(|| Some(proof.provider_id.clone()))
         }
+        TransactionKind::DeployContract { owner, .. } => Some(owner.clone()),
+        TransactionKind::ExecuteContract { caller, .. } => Some(caller.clone()),
+        TransactionKind::CreateToken { owner, .. } => Some(owner.clone()),
+        TransactionKind::MintCustom { authority, .. } => Some(authority.clone()),
+        TransactionKind::TransferCustom { from, .. } => Some(from.clone()),
+        TransactionKind::TreasuryDeposit { from, .. } => Some(from.clone()),
+        TransactionKind::TreasuryWithdraw { authority, .. } => Some(authority.clone()),
     }
 }
 
