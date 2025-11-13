@@ -117,6 +117,12 @@ Register a node and submit a task:
   --mode chat \
   --chat-prompt "Summarize the latest GPU architecture breakthroughs across vendors"
 
+# Inspect node inventories and earnings without leaving the CLI
+./scripts/gpang node list
+./scripts/gpang node list --owner alice
+./scripts/gpang node show --node-id node-1
+./scripts/gpang node earnings --node-id node-1
+
 # Submit a task-proof commitment to advance consensus
 ./scripts/gpang task proof \
   --round 1 \
@@ -216,6 +222,9 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 - `GET /accounts` — Accounts and balances
 - `GET /providers` — Provider registry
 - `GET /nodes` — Registered nodes
+- `GET /node/:node_id` — Detailed node record with hardware, metrics, and role data
+- `GET /node/:node_id/earnings` — Summary of cumulative node rewards and segment history
+- `GET /accounts/:account_id/nodes` — Nodes registered by a specific account plus aggregated earnings
 - `GET /tasks` — Task ledger
 - `GET /contracts` — Smart contract registry and metadata
 - `GET /contracts/events` — Immutable execution log entries

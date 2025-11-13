@@ -407,6 +407,10 @@ pub struct Node {
     pub decentralization_weight: f64,
     pub scheduler_jobs_executed: u64,
     pub assignment_jobs_generated: u64,
+    #[serde(default)]
+    pub total_rewards: u64,
+    #[serde(default)]
+    pub last_reward_at: u64,
 }
 
 /// Captures the outcome of a FlashRace segment.
@@ -889,6 +893,8 @@ impl LedgerState {
             decentralization_weight: 1.0,
             scheduler_jobs_executed: 0,
             assignment_jobs_generated: 0,
+            total_rewards: 0,
+            last_reward_at: 0,
         };
         let node_beta = Node {
             id: "node-beta".to_string(),
@@ -931,6 +937,8 @@ impl LedgerState {
             decentralization_weight: 1.0,
             scheduler_jobs_executed: 0,
             assignment_jobs_generated: 0,
+            total_rewards: 0,
+            last_reward_at: 0,
         };
         let node_scheduler = Node {
             id: "node-scheduler".to_string(),
@@ -973,6 +981,8 @@ impl LedgerState {
             decentralization_weight: 1.0,
             scheduler_jobs_executed: 6,
             assignment_jobs_generated: 0,
+            total_rewards: 0,
+            last_reward_at: 0,
         };
         let node_assignment = Node {
             id: "node-assignment".to_string(),
@@ -1015,6 +1025,8 @@ impl LedgerState {
             decentralization_weight: 1.0,
             scheduler_jobs_executed: 0,
             assignment_jobs_generated: 5,
+            total_rewards: 0,
+            last_reward_at: 0,
         };
 
         state.nodes.insert(node_alpha.id.clone(), node_alpha);

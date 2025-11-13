@@ -477,7 +477,7 @@ impl Ledger {
         fairness * completion_ratio * throughput_factor
     }
 
-    fn apply_task_share_for_node(&mut self, node_id: &str) {
+    fn apply_task_share_for_node(&mut self, node_id: &str, reward: u64) {
         {
             let Some(node) = self.state.nodes.get_mut(node_id) else {
                 return;
@@ -487,6 +487,8 @@ impl Ledger {
             }
             node.task_slots_granted = node.task_slots_granted.saturating_add(1);
             node.task_segments_completed = node.task_segments_completed.saturating_add(1);
+            node.total_rewards = node.total_rewards.saturating_add(reward);
+            node.last_reward_at = current_timestamp();
         }
         self.state.network_capacity.total_task_slots = self
             .state
@@ -1101,6 +1103,8 @@ impl Ledger {
         );
         node.scheduler_jobs_executed = 0;
         node.assignment_jobs_generated = 0;
+        node.total_rewards = 0;
+        node.last_reward_at = 0;
         self.state.nodes.insert(node.id.clone(), node.clone());
         self.recalculate_average_tasks();
         Ok(node)
@@ -1517,7 +1521,7 @@ impl Ledger {
             if let Some(best) = proofs.first() {
                 let reward = self.calculate_segment_reward(best);
                 if let Some(node_id) = best.node_id.as_deref() {
-                    self.apply_task_share_for_node(node_id);
+                    self.apply_task_share_for_node(node_id, reward);
                 }
                 let provider_owner = self
                     .state

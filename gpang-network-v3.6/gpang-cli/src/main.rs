@@ -7,7 +7,7 @@ use ledger::types::{
     TransactionKind,
 };
 use reqwest::Client;
-use serde_json::Value;
+use serde_json::{self, Value};
 use std::{
     collections::HashMap,
     fs,
@@ -109,6 +109,21 @@ enum NodeCommand {
     Register(RegisterNodeArgs),
     /// Toggle node online/offline
     Status(UpdateNodeStatusArgs),
+    /// List nodes, optionally filtered by owner account
+    List {
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// Show a single node record
+    Show {
+        #[arg(long)]
+        node_id: String,
+    },
+    /// Display a node's cumulative earnings
+    Earnings {
+        #[arg(long)]
+        node_id: String,
+    },
 }
 
 #[derive(Args)]
@@ -790,6 +805,44 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
                 .await?
                 .error_for_status()?;
             println!("{}", "Node status updated".green());
+        }
+        NodeCommand::List { owner } => {
+            let url = if let Some(owner) = owner {
+                format!("{}/accounts/{}/nodes", rpc, owner)
+            } else {
+                format!("{}/nodes", rpc)
+            };
+            let res = client.get(url).send().await?.error_for_status()?;
+            let payload: Value = res.json().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).context("failed to pretty print nodes")?
+            );
+        }
+        NodeCommand::Show { node_id } => {
+            let res = client
+                .get(format!("{}/node/{}", rpc, node_id))
+                .send()
+                .await?
+                .error_for_status()?;
+            let payload: Value = res.json().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).context("failed to pretty print node")?
+            );
+        }
+        NodeCommand::Earnings { node_id } => {
+            let res = client
+                .get(format!("{}/node/{}/earnings", rpc, node_id))
+                .send()
+                .await?
+                .error_for_status()?;
+            let payload: Value = res.json().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload)
+                    .context("failed to pretty print node earnings")?
+            );
         }
     }
     Ok(())

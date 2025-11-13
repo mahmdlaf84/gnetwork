@@ -6,15 +6,19 @@ use std::{
 };
 
 use axum::{
-    extract::State, http::StatusCode, response::IntoResponse, routing::get, routing::post, Json,
-    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    routing::post,
+    Json, Router,
 };
 use clap::Parser;
 use ledger::{
     build_transaction, current_timestamp, types::*, Ledger, NetworkSummary, DEFAULT_LEDGER_FILE,
     MIN_GAS_PRICE,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::{signal, sync::Mutex};
 use tracing::{error, info};
@@ -73,6 +77,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/accounts", get(list_accounts))
         .route("/providers", get(list_providers))
         .route("/nodes", get(list_nodes))
+        .route("/node/:node_id", get(get_node))
+        .route("/node/:node_id/earnings", get(get_node_earnings))
+        .route("/accounts/:account_id/nodes", get(list_account_nodes))
         .route("/tasks", get(list_tasks))
         .route("/contracts", get(list_contracts))
         .route("/contracts/events", get(list_contract_events))
@@ -193,6 +200,83 @@ async fn list_providers(State(state): State<AppState>) -> Json<Vec<Provider>> {
 async fn list_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
     let ledger = state.ledger.lock().await;
     Json(ledger.state.nodes.values().cloned().collect())
+}
+
+async fn get_node(State(state): State<AppState>, Path(node_id): Path<String>) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    match ledger.state.nodes.get(&node_id) {
+        Some(node) => (StatusCode::OK, Json(node.clone())).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "node not found", "node_id": node_id })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct NodeEarningsView {
+    node_id: String,
+    owner: String,
+    total_rewards: u64,
+    task_segments_completed: u64,
+    task_slots_granted: u64,
+    last_reward_at: u64,
+}
+
+async fn get_node_earnings(
+    State(state): State<AppState>,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    match ledger.state.nodes.get(&node_id) {
+        Some(node) => {
+            let view = NodeEarningsView {
+                node_id: node.id.clone(),
+                owner: node.owner.clone(),
+                total_rewards: node.total_rewards,
+                task_segments_completed: node.task_segments_completed,
+                task_slots_granted: node.task_slots_granted,
+                last_reward_at: node.last_reward_at,
+            };
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "node not found", "node_id": node_id })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct AccountNodesResponse {
+    account_id: String,
+    total_nodes: usize,
+    total_rewards: u64,
+    nodes: Vec<Node>,
+}
+
+async fn list_account_nodes(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    let nodes: Vec<Node> = ledger
+        .state
+        .nodes
+        .values()
+        .filter(|node| node.owner == account_id)
+        .cloned()
+        .collect();
+    let total_rewards = nodes.iter().map(|node| node.total_rewards).sum();
+    let response = AccountNodesResponse {
+        account_id,
+        total_nodes: nodes.len(),
+        total_rewards,
+        nodes,
+    };
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {
@@ -442,6 +526,8 @@ async fn register_node(
         decentralization_weight: 0.0,
         scheduler_jobs_executed: 0,
         assignment_jobs_generated: 0,
+        total_rewards: 0,
+        last_reward_at: 0,
     };
     match ledger.register_node(node) {
         Ok(node) => {
