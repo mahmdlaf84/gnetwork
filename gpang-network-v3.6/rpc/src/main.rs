@@ -20,7 +20,11 @@ use ledger::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{signal, sync::Mutex};
+use tokio::{
+    signal,
+    sync::Mutex,
+    time::{sleep_until, Instant},
+};
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -29,6 +33,10 @@ struct AppState {
     ledger: Arc<Mutex<Ledger>>,
     mempool: Arc<Mutex<Vec<Transaction>>>,
 }
+
+const TARGET_BLOCK_INTERVAL: Duration = Duration::from_millis(200);
+const OPTIMISTIC_BLOCK_INTERVAL: Duration = Duration::from_millis(150);
+const OPTIMISTIC_MEMPOOL_THRESHOLD: usize = 512;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "GPANG Network RPC service", long_about = None)]
@@ -115,9 +123,18 @@ async fn main() -> anyhow::Result<()> {
 
 fn spawn_consensus_loop(state: AppState) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3));
         loop {
-            interval.tick().await;
+            let optimistic = {
+                let mempool = state.mempool.lock().await;
+                mempool.len() >= OPTIMISTIC_MEMPOOL_THRESHOLD
+            };
+            let interval = if optimistic {
+                OPTIMISTIC_BLOCK_INTERVAL
+            } else {
+                TARGET_BLOCK_INTERVAL
+            };
+            let deadline = Instant::now() + interval;
+
             let mut transactions = {
                 let mut mempool = state.mempool.lock().await;
                 mempool.drain(..).collect::<Vec<_>>()
@@ -136,17 +153,13 @@ fn spawn_consensus_loop(state: AppState) {
                 Ok(mut rewards) => transactions.append(&mut rewards),
                 Err(err) => error!(?err, "failed to compute block rewards"),
             }
-            match ledger.commit_block(transactions) {
-                Ok(block) => {
-                    info!(
-                        height = block.height,
-                        txs = block.transactions.len(),
-                        "block committed"
-                    );
-                }
-                Err(err) => {
-                    error!(?err, "failed to commit block");
-                }
+            if let Err(err) = ledger.stage_block_candidate(transactions, optimistic) {
+                error!(?err, "failed to advance consensus");
+            }
+            drop(ledger);
+            let now = Instant::now();
+            if deadline > now {
+                sleep_until(deadline).await;
             }
         }
     });

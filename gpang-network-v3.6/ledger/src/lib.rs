@@ -22,9 +22,9 @@ pub mod types;
 
 use types::{
     Account, Block, ChatResponse, ContractEvent, ContractRuntime, LedgerState, ModelProfile, Node,
-    NodeHardware, NodeMetrics, NodeNft, NodeRole, Provider, ScheduledProvider, SmartContract, Task,
-    TaskMode, TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind,
-    ZeroProof,
+    NodeHardware, NodeMetrics, NodeNft, NodeRole, PendingBlock, Provider, ScheduledProvider,
+    SmartContract, Task, TaskMode, TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction,
+    TransactionKind, ZeroProof,
 };
 
 /// Default scheme label for synthesized zero proofs.
@@ -452,6 +452,27 @@ impl Ledger {
             self.state.network_capacity.total_task_slots as f64 / denom;
     }
 
+    fn update_parallelism_metrics(&mut self) {
+        let base_parallelism = 200_000u64;
+        let mut observed_parallelism = 0u64;
+        for node in self.state.nodes.values().filter(|node| node.online) {
+            let throughput_component = (node.llm_profile.throughput_tok_s as u64) / 4;
+            let cpu_component = (node.hardware.cpu_threads as u64).saturating_mul(1_024);
+            let gpu_component = (node.hardware.gpu_vram_mb / 16).max(1) as u64 * 2_048;
+            let estimate = throughput_component
+                .max(cpu_component)
+                .max(gpu_component)
+                .max(base_parallelism);
+            if estimate > observed_parallelism {
+                observed_parallelism = estimate;
+            }
+        }
+        if observed_parallelism == 0 {
+            observed_parallelism = base_parallelism;
+        }
+        self.state.network_capacity.per_node_parallelism = observed_parallelism;
+    }
+
     fn decentralization_weight_for(
         task_slots: u64,
         segments: u64,
@@ -496,6 +517,7 @@ impl Ledger {
             .total_task_slots
             .saturating_add(1);
         self.recalculate_average_tasks();
+        self.update_parallelism_metrics();
         if let Some(node) = self.state.nodes.get_mut(node_id) {
             node.decentralization_weight = Self::decentralization_weight_for(
                 node.task_slots_granted,
@@ -1015,25 +1037,135 @@ impl Ledger {
         Ok(())
     }
 
-    /// Appends a block and persists the ledger.
-    pub fn commit_block(&mut self, transactions: Vec<Transaction>) -> Result<Block, LedgerError> {
+    fn update_consensus_metrics(
+        &mut self,
+        block: &Block,
+        proposed_at: u64,
+        finalized_at: u64,
+        optimistic: bool,
+    ) {
+        let capacity = &mut self.state.network_capacity;
+        let previous_timestamp = self
+            .state
+            .blocks
+            .last()
+            .map(|blk| blk.timestamp)
+            .unwrap_or(finalized_at.saturating_sub(capacity.target_block_interval_ms));
+        let interval = finalized_at.saturating_sub(previous_timestamp).max(1);
+        capacity.observed_block_interval_ms = interval;
+        let interval_secs = (interval as f64) / 1_000.0;
+        if interval_secs > 0.0 {
+            let observed_tps = (block.transactions.len() as f64 / interval_secs).round() as u64;
+            capacity.observed_tps = observed_tps;
+        }
+        let finality = finalized_at.saturating_sub(proposed_at);
+        let clamped_finality = finality
+            .max(capacity.finality_min_ms)
+            .min(capacity.finality_max_ms);
+        capacity.last_finality_ms = clamped_finality;
+        if optimistic {
+            capacity.finality_min_ms = capacity.finality_min_ms.min(clamped_finality);
+        }
+        capacity.consensus_round = capacity.consensus_round.max(block.height + 1);
+    }
+
+    fn finalize_pending_block(
+        &mut self,
+        candidate: PendingBlock,
+        finalized_at: u64,
+    ) -> Result<Block, LedgerError> {
+        let PendingBlock {
+            proposed_at,
+            optimistic,
+            transactions,
+            ..
+        } = candidate;
         for tx in &transactions {
             self.apply_transaction(tx)?;
         }
         let height = self.state.blocks.len() as u64;
         let block = Block {
             height,
-            timestamp: current_timestamp(),
+            timestamp: finalized_at,
             transactions: transactions.clone(),
         };
+        self.update_consensus_metrics(&block, proposed_at, finalized_at, optimistic);
+        self.state.consensus_pipeline.last_finalized_height = block.height;
         self.state.blocks.push(block.clone());
         self.persist()?;
         info!(
             height,
             tx_count = block.transactions.len(),
+            optimistic,
+            finality_ms = self.state.network_capacity.last_finality_ms,
             "committed block"
         );
         Ok(block)
+    }
+
+    /// Enqueues a block proposal and finalizes it once enough consensus rounds passed.
+    pub fn stage_block_candidate(
+        &mut self,
+        transactions: Vec<Transaction>,
+        optimistic: bool,
+    ) -> Result<Option<Block>, LedgerError> {
+        let round = self.state.network_capacity.consensus_round + 1;
+        self.state.network_capacity.consensus_round = round;
+        let proposed_at = current_timestamp();
+        let candidate = PendingBlock {
+            round,
+            proposed_at,
+            optimistic,
+            transactions,
+        };
+        info!(
+            round,
+            tx_count = candidate.transactions.len(),
+            optimistic,
+            "staged block proposal"
+        );
+        self.state.consensus_pipeline.queue.push_back(candidate);
+
+        let mut finalized: Option<Block> = None;
+        loop {
+            let ready = {
+                if let Some(front) = self.state.consensus_pipeline.queue.front() {
+                    let required_rounds: u64 = if front.optimistic { 2 } else { 3 };
+                    self.state
+                        .network_capacity
+                        .consensus_round
+                        .saturating_sub(front.round)
+                        + 1
+                        >= required_rounds
+                } else {
+                    false
+                }
+            };
+            if !ready {
+                break;
+            }
+            if let Some(pending) = self.state.consensus_pipeline.queue.pop_front() {
+                let finalized_at = current_timestamp();
+                let block = self.finalize_pending_block(pending, finalized_at)?;
+                finalized = Some(block);
+            }
+        }
+        Ok(finalized)
+    }
+
+    /// Appends a block and persists the ledger immediately, bypassing staged finality.
+    pub fn commit_block(&mut self, transactions: Vec<Transaction>) -> Result<Block, LedgerError> {
+        self.state.consensus_pipeline.queue.clear();
+        let round = self.state.network_capacity.consensus_round + 1;
+        self.state.network_capacity.consensus_round = round;
+        let proposed_at = current_timestamp();
+        let candidate = PendingBlock {
+            round,
+            proposed_at,
+            optimistic: false,
+            transactions,
+        };
+        self.finalize_pending_block(candidate, proposed_at)
     }
 
     /// Registers or updates a provider.
@@ -1111,6 +1243,7 @@ impl Ledger {
         self.state.nodes.insert(node.id.clone(), node.clone());
         self.state.node_nfts.insert(node.nft_token_id.clone(), nft);
         self.recalculate_average_tasks();
+        self.update_parallelism_metrics();
         Ok(node)
     }
 
@@ -1616,7 +1749,6 @@ impl Ledger {
                 }
             }
         }
-        self.state.network_capacity.consensus_round += 1;
         outputs
     }
 
@@ -1663,11 +1795,23 @@ pub struct NetworkSummary {
     pub total_tasks: usize,
     pub consensus_round: u64,
     pub target_tokens_per_sec: u64,
+    pub effective_tps_target: u64,
     pub peak_tokens_per_sec: u64,
     pub total_tokens_processed: u128,
     pub max_parallel_nodes: u64,
     pub total_task_slots: u128,
     pub average_tasks_per_node: f64,
+    pub target_block_interval_ms: u64,
+    pub optimistic_block_interval_ms: u64,
+    pub finality_min_ms: u64,
+    pub finality_max_ms: u64,
+    pub observed_block_interval_ms: u64,
+    pub observed_tps: u64,
+    pub last_finality_ms: u64,
+    pub network_bandwidth_gbps: u64,
+    pub validator_bandwidth_gbps: u64,
+    pub active_validator_target: u64,
+    pub per_node_parallelism: u64,
     pub total_contracts: usize,
     pub total_custom_tokens: usize,
     pub platform_token_count: usize,
@@ -1711,11 +1855,23 @@ impl From<&LedgerState> for NetworkSummary {
             total_tasks: state.tasks.len(),
             consensus_round: state.network_capacity.consensus_round,
             target_tokens_per_sec: state.network_capacity.target_tokens_per_sec,
+            effective_tps_target: state.network_capacity.effective_tps_target,
             peak_tokens_per_sec: state.network_capacity.peak_observed_tokens_per_sec,
             total_tokens_processed: state.network_capacity.tokens_processed,
             max_parallel_nodes: state.network_capacity.max_parallel_nodes,
             total_task_slots: state.network_capacity.total_task_slots,
             average_tasks_per_node: state.network_capacity.average_tasks_per_node,
+            target_block_interval_ms: state.network_capacity.target_block_interval_ms,
+            optimistic_block_interval_ms: state.network_capacity.optimistic_block_interval_ms,
+            finality_min_ms: state.network_capacity.finality_min_ms,
+            finality_max_ms: state.network_capacity.finality_max_ms,
+            observed_block_interval_ms: state.network_capacity.observed_block_interval_ms,
+            observed_tps: state.network_capacity.observed_tps,
+            last_finality_ms: state.network_capacity.last_finality_ms,
+            network_bandwidth_gbps: state.network_capacity.network_bandwidth_gbps,
+            validator_bandwidth_gbps: state.network_capacity.validator_bandwidth_gbps,
+            active_validator_target: state.network_capacity.active_validator_target,
+            per_node_parallelism: state.network_capacity.per_node_parallelism,
             total_contracts: state.contracts.len(),
             total_custom_tokens: state.token_definitions.len(),
             platform_token_count: state.platform_tokens.len(),

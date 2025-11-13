@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     str::FromStr,
 };
 
@@ -610,14 +610,27 @@ pub struct TaskProof {
 
 /// Aggregate metrics for measuring network scalability targets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NetworkCapacity {
     pub consensus_round: u64,
     pub tokens_processed: u128,
     pub target_tokens_per_sec: u64,
+    pub effective_tps_target: u64,
     pub max_parallel_nodes: u64,
     pub peak_observed_tokens_per_sec: u64,
     pub total_task_slots: u128,
     pub average_tasks_per_node: f64,
+    pub target_block_interval_ms: u64,
+    pub optimistic_block_interval_ms: u64,
+    pub finality_min_ms: u64,
+    pub finality_max_ms: u64,
+    pub observed_block_interval_ms: u64,
+    pub observed_tps: u64,
+    pub last_finality_ms: u64,
+    pub network_bandwidth_gbps: u64,
+    pub validator_bandwidth_gbps: u64,
+    pub active_validator_target: u64,
+    pub per_node_parallelism: u64,
 }
 
 impl Default for NetworkCapacity {
@@ -626,12 +639,41 @@ impl Default for NetworkCapacity {
             consensus_round: 0,
             tokens_processed: 0,
             target_tokens_per_sec: 10_000_000,
+            effective_tps_target: 800_000,
             max_parallel_nodes: 100_000_000,
             peak_observed_tokens_per_sec: 0,
             total_task_slots: 0,
             average_tasks_per_node: 0.0,
+            target_block_interval_ms: 200,
+            optimistic_block_interval_ms: 150,
+            finality_min_ms: 300,
+            finality_max_ms: 600,
+            observed_block_interval_ms: 0,
+            observed_tps: 0,
+            last_finality_ms: 0,
+            network_bandwidth_gbps: 40,
+            validator_bandwidth_gbps: 10,
+            active_validator_target: 1_200,
+            per_node_parallelism: 200_000,
         }
     }
+}
+
+/// Block proposal that is waiting for finality votes.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PendingBlock {
+    pub round: u64,
+    pub proposed_at: u64,
+    pub optimistic: bool,
+    pub transactions: Vec<Transaction>,
+}
+
+/// Rolling HotStuff-style consensus pipeline tracking proposals through finality.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ConsensusPipeline {
+    pub queue: VecDeque<PendingBlock>,
+    pub last_finalized_height: u64,
 }
 
 /// A persisted block.
@@ -670,6 +712,8 @@ pub struct LedgerState {
     pub next_contract_id: u64,
     #[serde(default)]
     pub platform_tokens: HashSet<String>,
+    #[serde(default)]
+    pub consensus_pipeline: ConsensusPipeline,
 }
 
 impl Default for LedgerState {
@@ -692,6 +736,7 @@ impl Default for LedgerState {
             token_definitions: HashMap::new(),
             next_contract_id: 1,
             platform_tokens: HashSet::new(),
+            consensus_pipeline: ConsensusPipeline::default(),
         }
     }
 }
@@ -1121,9 +1166,18 @@ impl LedgerState {
         state.next_node_nft_id = 5;
 
         state.treasury = Treasury::with_balances(900_000_000_000, 400_000_000_000, 150_000_000_000);
-        state.network_capacity.target_tokens_per_sec = 10_000_000;
+        state.network_capacity.target_tokens_per_sec = 12_000_000;
+        state.network_capacity.effective_tps_target = 800_000;
         state.network_capacity.max_parallel_nodes = 100_000_000;
         state.network_capacity.peak_observed_tokens_per_sec = 6_400_000;
+        state.network_capacity.target_block_interval_ms = 200;
+        state.network_capacity.optimistic_block_interval_ms = 150;
+        state.network_capacity.finality_min_ms = 300;
+        state.network_capacity.finality_max_ms = 600;
+        state.network_capacity.network_bandwidth_gbps = 40;
+        state.network_capacity.validator_bandwidth_gbps = 10;
+        state.network_capacity.active_validator_target = 1_200;
+        state.network_capacity.per_node_parallelism = 200_000;
 
         state.blocks.push(Block {
             height: 0,

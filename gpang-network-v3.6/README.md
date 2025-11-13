@@ -5,7 +5,7 @@ GPANG Network is a Rust-based prototype for a decentralized GPU marketplace with
 ## Workspace Layout
 
 - `ledger/` — Core state machine with token accounting, smart contract and token registries, provider catalogues, task tracking, and JSON persistence helpers.
-- `rpc/` — Axum-based REST API and task-proof consensus loop producing blocks every 3 seconds.
+- `rpc/` — Axum-based REST API and task-proof consensus loop delivering 200 ms blocks (150 ms optimistic) with <3-round finality.
 - `gpang-cli/` — Command line tool for managing providers, nodes, accounts, contracts, custom tokens, treasury flows, and submitting tasks.
 - `explorer/` — Static HTML/Tailwind dashboard that consumes the REST API for network visibility.
 - `scripts/` — Convenience scripts, including `start-node.sh` for launching the RPC node.
@@ -30,7 +30,7 @@ The command builds all workspace members in release mode. The ledger crate is pu
 ./scripts/start-node.sh
 ```
 
-The script initializes `ledger_v35.json` if missing and starts the RPC service on `0.0.0.0:8080`. Blocks are produced every 3 seconds, even when the mempool is empty. Transactions submitted via the CLI or HTTP API are batched into the next block and persisted to disk.
+The script initializes `ledger_v35.json` if missing and starts the RPC service on `0.0.0.0:8080`. Blocks arrive every 200 ms in the steady state (accelerating to 150 ms when the mempool is saturated). Transactions submitted via the CLI or HTTP API are pipelined through a three-stage HotStuff queue so finality lands within 300–600 ms while the ledger is persisted to disk.
 
 ### Environment variables
 
@@ -249,15 +249,15 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 
 ## Consensus Loop
 
-A background task ticks every 3 seconds:
+A background task ticks every 200 ms (dropping to 150 ms on the optimistic path when the mempool is busy):
 
 1. Drains mempool transactions accepted via `/tx` and `/consensus/task-proof`.
 2. Elects a high-stake, high-throughput node as task-proof leader using task share aware weighting so under-served nodes gain additional chances to produce blocks.
 3. Converts validated proofs into `segment_receipt` + `payout` transactions, then appends staking reward payouts computed from `reward_bps`.
-4. Commits a new block with the collected transactions.
+4. Stages the block proposal inside a three-phase HotStuff pipeline; once it survives 2–3 rounds (≤600 ms) the block finalizes.
 5. Persists the ledger snapshot to `ledger_v35.json`.
 
-This HotStuff-Pro inspired loop runs as a single validator today, but the task-proof path mirrors a decentralized HotStuff-Pro deployment. Consensus rounds track cumulative throughput (`target_tokens_per_sec` defaults to 10,000,000) and can scale to 100,000,000 parallel nodes submitting proofs. The ledger records how many task slots each node captures, keeps an average tasks-per-node benchmark, and penalizes leaders that have already claimed disproportionate work so scheduling and consensus remain decentralized as throughput increases.
+This HotStuff-Pro inspired loop runs as a single validator today, but the task-proof path mirrors a decentralized HotStuff-Pro deployment. Consensus rounds track cumulative throughput (`target_tokens_per_sec` defaults to 12,000,000) and publish high-performance targets directly in the ledger: ≥800,000 TPS, ≥40 Gbps aggregate bandwidth (with ≥10 Gbps per validator), 1,200 active validators, and ≥200,000 concurrent execution threads per node. The ledger records how many task slots each node captures, keeps an average tasks-per-node benchmark, and penalizes leaders that have already claimed disproportionate work so scheduling and consensus remain decentralized as throughput and bandwidth increase.
 
 ## Persistence
 
