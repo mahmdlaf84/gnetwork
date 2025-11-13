@@ -54,6 +54,52 @@ impl FromStr for ContractRuntime {
     }
 }
 
+/// Distinct operational roles that a node can fulfil in the network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeRole {
+    /// Participates in validation and finality voting.
+    Validator,
+    /// Executes user workloads and produces task proofs.
+    Compute,
+    /// Distributes work to compute providers.
+    Scheduler,
+    /// Builds decentralized task schedules for schedulers to follow.
+    Assignment,
+}
+
+impl Default for NodeRole {
+    fn default() -> Self {
+        NodeRole::Compute
+    }
+}
+
+impl NodeRole {
+    /// Readable label used by CLI and explorer surfaces.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NodeRole::Validator => "validator",
+            NodeRole::Compute => "compute",
+            NodeRole::Scheduler => "scheduler",
+            NodeRole::Assignment => "assignment",
+        }
+    }
+}
+
+impl FromStr for NodeRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "validator" => Ok(NodeRole::Validator),
+            "compute" => Ok(NodeRole::Compute),
+            "scheduler" => Ok(NodeRole::Scheduler),
+            "assignment" => Ok(NodeRole::Assignment),
+            other => Err(format!("unsupported node role: {}", other)),
+        }
+    }
+}
+
 /// A high level description of a transaction payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -348,6 +394,8 @@ pub struct Node {
     pub owner: String,
     pub region: String,
     pub llm_profile: ModelProfile,
+    #[serde(default)]
+    pub role: NodeRole,
     pub online: bool,
     pub reputation: u64,
     pub registered_at: u64,
@@ -357,6 +405,8 @@ pub struct Node {
     pub task_slots_granted: u64,
     pub task_segments_completed: u64,
     pub decentralization_weight: f64,
+    pub scheduler_jobs_executed: u64,
+    pub assignment_jobs_generated: u64,
 }
 
 /// Captures the outcome of a FlashRace segment.
@@ -423,6 +473,10 @@ pub struct Task {
     pub chat_responses: Vec<ChatResponse>,
     /// Aggregated and optimized chat output.
     pub chat_aggregate: Option<String>,
+    /// Assignment node selected to craft scheduling plans.
+    pub assignment_node_id: Option<String>,
+    /// Scheduler node chosen to execute scheduling plans.
+    pub scheduler_node_id: Option<String>,
 }
 
 /// Scheduler output for a provider.
@@ -635,6 +689,7 @@ impl LedgerState {
         foundation.aia_balance = 1_000_000_000_000;
         foundation.work_balance = 500_000_000_000;
         foundation.stor_balance = 200_000_000_000;
+        foundation.stake_balance = 200_000_000_000;
         foundation.total_earnings = foundation.aia_balance;
         state.accounts.insert(foundation.id.clone(), foundation);
 
@@ -798,6 +853,7 @@ impl LedgerState {
             owner: "foundation".to_string(),
             region: "AP-SEA".to_string(),
             llm_profile: profile_flagship.clone(),
+            role: NodeRole::Validator,
             online: true,
             reputation: 990,
             registered_at: timestamp,
@@ -831,12 +887,15 @@ impl LedgerState {
             task_slots_granted: 0,
             task_segments_completed: 0,
             decentralization_weight: 1.0,
+            scheduler_jobs_executed: 0,
+            assignment_jobs_generated: 0,
         };
         let node_beta = Node {
             id: "node-beta".to_string(),
             owner: "builder".to_string(),
             region: "NA-USA".to_string(),
             llm_profile: profile_usa,
+            role: NodeRole::Compute,
             online: true,
             reputation: 905,
             registered_at: timestamp,
@@ -870,12 +929,104 @@ impl LedgerState {
             task_slots_granted: 0,
             task_segments_completed: 0,
             decentralization_weight: 1.0,
+            scheduler_jobs_executed: 0,
+            assignment_jobs_generated: 0,
+        };
+        let node_scheduler = Node {
+            id: "node-scheduler".to_string(),
+            owner: "builder".to_string(),
+            region: "EU-DE".to_string(),
+            llm_profile: profile_flagship.clone(),
+            role: NodeRole::Scheduler,
+            online: true,
+            reputation: 850,
+            registered_at: timestamp,
+            fingerprint: "0xscheduler".to_string(),
+            hardware: NodeHardware {
+                cpu_model: "AMD EPYC 7713".to_string(),
+                cpu_cores: 64,
+                cpu_threads: 128,
+                memory_total_mb: 1_572_864,
+                gpu_vendor: "NVIDIA".to_string(),
+                gpu_model: "A100".to_string(),
+                gpu_vram_mb: 40_000,
+                os: "Linux".to_string(),
+            },
+            metrics: NodeMetrics {
+                timestamp,
+                cpu_usage_pct: 15.0,
+                memory_usage_pct: 35.0,
+                gpu_usage_pct: 10.0,
+                machine_load_one: 1.2,
+                machine_load_five: 1.0,
+                machine_load_fifteen: 0.8,
+                disk_usage_pct: 45.0,
+                disk_read_mbps: 50.0,
+                disk_write_mbps: 42.0,
+                network_rx_mbps: 380.0,
+                network_tx_mbps: 365.0,
+                gpu_memory_used_mb: 12_000,
+                gpu_memory_total_mb: 40_000,
+            },
+            task_slots_granted: 0,
+            task_segments_completed: 0,
+            decentralization_weight: 1.0,
+            scheduler_jobs_executed: 6,
+            assignment_jobs_generated: 0,
+        };
+        let node_assignment = Node {
+            id: "node-assignment".to_string(),
+            owner: "foundation".to_string(),
+            region: "AP-SEA".to_string(),
+            llm_profile: profile_flagship,
+            role: NodeRole::Assignment,
+            online: true,
+            reputation: 920,
+            registered_at: timestamp,
+            fingerprint: "0xassignment".to_string(),
+            hardware: NodeHardware {
+                cpu_model: "Apple M2 Ultra".to_string(),
+                cpu_cores: 24,
+                cpu_threads: 24,
+                memory_total_mb: 262_144,
+                gpu_vendor: "Apple".to_string(),
+                gpu_model: "M2 Ultra".to_string(),
+                gpu_vram_mb: 64_000,
+                os: "macOS".to_string(),
+            },
+            metrics: NodeMetrics {
+                timestamp,
+                cpu_usage_pct: 18.0,
+                memory_usage_pct: 42.0,
+                gpu_usage_pct: 15.0,
+                machine_load_one: 1.1,
+                machine_load_five: 0.9,
+                machine_load_fifteen: 0.7,
+                disk_usage_pct: 30.0,
+                disk_read_mbps: 38.0,
+                disk_write_mbps: 25.0,
+                network_rx_mbps: 240.0,
+                network_tx_mbps: 255.0,
+                gpu_memory_used_mb: 9_000,
+                gpu_memory_total_mb: 64_000,
+            },
+            task_slots_granted: 0,
+            task_segments_completed: 0,
+            decentralization_weight: 1.0,
+            scheduler_jobs_executed: 0,
+            assignment_jobs_generated: 5,
         };
 
         state.nodes.insert(node_alpha.id.clone(), node_alpha);
         state.nodes.insert(node_beta.id.clone(), node_beta);
+        state
+            .nodes
+            .insert(node_scheduler.id.clone(), node_scheduler);
+        state
+            .nodes
+            .insert(node_assignment.id.clone(), node_assignment);
 
-        state.next_node_id = 3;
+        state.next_node_id = 5;
 
         state.treasury = Treasury::with_balances(900_000_000_000, 400_000_000_000, 150_000_000_000);
         state.network_capacity.target_tokens_per_sec = 10_000_000;

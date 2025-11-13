@@ -22,8 +22,9 @@ pub mod types;
 
 use types::{
     Account, Block, ChatResponse, ContractEvent, ContractRuntime, LedgerState, ModelProfile, Node,
-    NodeHardware, NodeMetrics, Provider, ScheduledProvider, SmartContract, Task, TaskMode,
-    TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind, ZeroProof,
+    NodeHardware, NodeMetrics, NodeRole, Provider, ScheduledProvider, SmartContract, Task,
+    TaskMode, TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind,
+    ZeroProof,
 };
 
 /// Default scheme label for synthesized zero proofs.
@@ -31,6 +32,9 @@ pub const ZERO_PROOF_SCHEME: &str = "gpang-zero-proof";
 
 /// Minimum gas price accepted by the ledger.
 pub const MIN_GAS_PRICE: u64 = 1;
+
+/// Minimum stake (in AIA) required for validator role registration.
+pub const MIN_VALIDATOR_STAKE: u64 = 100_000_000;
 
 /// Returns the current Unix timestamp in milliseconds.
 pub fn current_timestamp() -> u64 {
@@ -437,7 +441,12 @@ impl Ledger {
     }
 
     fn recalculate_average_tasks(&mut self) {
-        let active = self.state.nodes.values().filter(|node| node.online).count() as f64;
+        let active = self
+            .state
+            .nodes
+            .values()
+            .filter(|node| node.online && node.role == NodeRole::Compute)
+            .count() as f64;
         let denom = if active > 0.0 { active } else { 1.0 };
         self.state.network_capacity.average_tasks_per_node =
             self.state.network_capacity.total_task_slots as f64 / denom;
@@ -473,6 +482,9 @@ impl Ledger {
             let Some(node) = self.state.nodes.get_mut(node_id) else {
                 return;
             };
+            if node.role != NodeRole::Compute {
+                return;
+            }
             node.task_slots_granted = node.task_slots_granted.saturating_add(1);
             node.task_segments_completed = node.task_segments_completed.saturating_add(1);
         }
@@ -493,6 +505,9 @@ impl Ledger {
     }
 
     fn consensus_score_for_node(&self, node: &Node, owner_stake: f64) -> f64 {
+        if node.role != NodeRole::Validator {
+            return 0.0;
+        }
         let reputation_factor = 1.0 + (node.reputation as f64 / 1_000.0);
         let throughput_factor =
             ((node.llm_profile.throughput_tok_s as f64 / 1_000.0).max(1.0)).sqrt();
@@ -514,6 +529,54 @@ impl Ledger {
         };
         let load_penalty = (1.0 / (1.0 + load_ratio)).clamp(0.35, 1.0);
         (owner_stake.sqrt() + throughput_factor) * reputation_factor * fairness * load_penalty
+    }
+
+    fn select_role_node(&self, preferred_region: Option<&str>, role: NodeRole) -> Option<String> {
+        let mut best_id: Option<String> = None;
+        let mut best_score = f64::MIN;
+        for node in self.state.nodes.values() {
+            if node.role != role || !node.online {
+                continue;
+            }
+            let region_factor = match preferred_region {
+                Some(pref) if pref == node.region => 1.5,
+                Some(pref) => {
+                    let pref_prefix = pref.split('-').next().unwrap_or(pref);
+                    let node_prefix = node
+                        .region
+                        .split('-')
+                        .next()
+                        .unwrap_or_else(|| node.region.as_str());
+                    if pref_prefix == node_prefix {
+                        1.2
+                    } else {
+                        1.0
+                    }
+                }
+                None => 1.0,
+            };
+            let load = (node.metrics.machine_load_one as f64).max(0.1);
+            let backlog = match role {
+                NodeRole::Scheduler => node.scheduler_jobs_executed as f64,
+                NodeRole::Assignment => node.assignment_jobs_generated as f64,
+                _ => node.task_slots_granted as f64,
+            };
+            let backlog_factor = 1.0 / (1.0 + backlog);
+            let score = region_factor * backlog_factor / load;
+            if score > best_score {
+                best_score = score;
+                best_id = Some(node.id.clone());
+            }
+        }
+        best_id
+    }
+
+    fn select_assignment_node(&self, preferred_region: Option<&str>) -> Option<String> {
+        self.select_role_node(preferred_region, NodeRole::Assignment)
+    }
+
+    fn select_scheduler_node(&self, preferred_region: Option<&str>) -> Option<String> {
+        self.select_role_node(preferred_region, NodeRole::Scheduler)
     }
 
     fn region_affinity(preferred: Option<&str>, provider_region: &str) -> f64 {
@@ -1006,7 +1069,19 @@ impl Ledger {
     }
 
     /// Registers a node in the ledger and returns the stored record.
-    pub fn register_node(&mut self, mut node: Node) -> Node {
+    pub fn register_node(&mut self, mut node: Node) -> Result<Node, LedgerError> {
+        if node.role == NodeRole::Validator {
+            let stake_balance = {
+                let account = self.get_account(&node.owner)?;
+                account.stake_balance
+            };
+            if stake_balance < MIN_VALIDATOR_STAKE {
+                return Err(LedgerError::Forbidden(format!(
+                    "validator nodes require at least {} AIA staked",
+                    MIN_VALIDATOR_STAKE
+                )));
+            }
+        }
         node.registered_at = current_timestamp();
         node.id = format!("node-{}", self.state.next_node_id);
         self.state.next_node_id += 1;
@@ -1024,9 +1099,11 @@ impl Ledger {
             self.state.network_capacity.average_tasks_per_node,
             node.llm_profile.throughput_tok_s,
         );
+        node.scheduler_jobs_executed = 0;
+        node.assignment_jobs_generated = 0;
         self.state.nodes.insert(node.id.clone(), node.clone());
         self.recalculate_average_tasks();
-        node
+        Ok(node)
     }
 
     fn fingerprint_for(hardware: &NodeHardware, owner: &str) -> String {
@@ -1074,7 +1151,23 @@ impl Ledger {
             chat_prompt,
             chat_responses: Vec::new(),
             chat_aggregate: None,
+            assignment_node_id: None,
+            scheduler_node_id: None,
         };
+        let assignment_node = self.select_assignment_node(task.preferred_region.as_deref());
+        if let Some(ref assignment_id) = assignment_node {
+            if let Some(node) = self.state.nodes.get_mut(assignment_id) {
+                node.assignment_jobs_generated = node.assignment_jobs_generated.saturating_add(1);
+            }
+        }
+        let scheduler_node = self.select_scheduler_node(task.preferred_region.as_deref());
+        if let Some(ref scheduler_id) = scheduler_node {
+            if let Some(node) = self.state.nodes.get_mut(scheduler_id) {
+                node.scheduler_jobs_executed = node.scheduler_jobs_executed.saturating_add(1);
+            }
+        }
+        task.assignment_node_id = assignment_node;
+        task.scheduler_node_id = scheduler_node;
         task.scheduled = self.compute_scheduled_providers(&task);
         self.state.tasks.insert(id.clone(), task);
         id
@@ -1479,7 +1572,12 @@ impl Ledger {
     /// Selects a leader node for the next task-proof consensus round.
     pub fn select_task_proof_leader(&self) -> Option<String> {
         let mut best: Option<(String, f64)> = None;
-        for node in self.state.nodes.values().filter(|n| n.online) {
+        for node in self
+            .state
+            .nodes
+            .values()
+            .filter(|n| n.online && n.role == NodeRole::Validator)
+        {
             let owner_stake = self
                 .state
                 .accounts
@@ -1507,6 +1605,10 @@ pub struct NetworkSummary {
     pub treasury_gas_collected: u64,
     pub active_providers: usize,
     pub active_nodes: usize,
+    pub validators_online: usize,
+    pub scheduler_nodes_online: usize,
+    pub assignment_nodes_online: usize,
+    pub compute_nodes_online: usize,
     pub total_tasks: usize,
     pub consensus_round: u64,
     pub target_tokens_per_sec: u64,
@@ -1519,6 +1621,7 @@ pub struct NetworkSummary {
     pub total_custom_tokens: usize,
     pub platform_token_count: usize,
     pub contract_events: usize,
+    pub min_validator_stake: u64,
 }
 
 impl From<&LedgerState> for NetworkSummary {
@@ -1528,13 +1631,32 @@ impl From<&LedgerState> for NetworkSummary {
             .values()
             .filter(|provider| provider.last_heartbeat.is_some())
             .count();
-        let active_nodes = state.nodes.values().filter(|node| node.online).count();
+        let mut validators_online = 0;
+        let mut scheduler_nodes_online = 0;
+        let mut assignment_nodes_online = 0;
+        let mut compute_nodes_online = 0;
+        for node in state.nodes.values().filter(|node| node.online) {
+            match node.role {
+                NodeRole::Validator => validators_online += 1,
+                NodeRole::Scheduler => scheduler_nodes_online += 1,
+                NodeRole::Assignment => assignment_nodes_online += 1,
+                NodeRole::Compute => compute_nodes_online += 1,
+            }
+        }
+        let active_nodes = validators_online
+            + scheduler_nodes_online
+            + assignment_nodes_online
+            + compute_nodes_online;
         Self {
             block_height: state.blocks.len() as u64,
             treasury_aia: state.treasury.aia_balance,
             treasury_gas_collected: state.treasury.gas_collected,
             active_providers,
             active_nodes,
+            validators_online,
+            scheduler_nodes_online,
+            assignment_nodes_online,
+            compute_nodes_online,
             total_tasks: state.tasks.len(),
             consensus_round: state.network_capacity.consensus_round,
             target_tokens_per_sec: state.network_capacity.target_tokens_per_sec,
@@ -1547,6 +1669,7 @@ impl From<&LedgerState> for NetworkSummary {
             total_custom_tokens: state.token_definitions.len(),
             platform_token_count: state.platform_tokens.len(),
             contract_events: state.contract_events.len(),
+            min_validator_stake: MIN_VALIDATOR_STAKE,
         }
     }
 }

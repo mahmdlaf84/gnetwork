@@ -57,10 +57,12 @@
               <th class="px-4 py-2 text-left">ID</th>
               <th class="px-4 py-2 text-left">Owner</th>
               <th class="px-4 py-2 text-left">Region</th>
+              <th class="px-4 py-2 text-left">Role</th>
               <th class="px-4 py-2 text-left">Hardware</th>
               <th class="px-4 py-2 text-left">Utilization</th>
               <th class="px-4 py-2 text-left">Network</th>
               <th class="px-4 py-2 text-left">Task Share</th>
+              <th class="px-4 py-2 text-left">Coordination</th>
               <th class="px-4 py-2 text-left">Online</th>
             </tr>
           </thead>
@@ -85,6 +87,8 @@
               <th class="px-4 py-2 text-left">Winner</th>
               <th class="px-4 py-2 text-left">Completed</th>
               <th class="px-4 py-2 text-left">Preferred Region</th>
+              <th class="px-4 py-2 text-left">Assignment Node</th>
+              <th class="px-4 py-2 text-left">Scheduler Node</th>
               <th class="px-4 py-2 text-left">Scheduled</th>
             </tr>
           </thead>
@@ -187,6 +191,10 @@
         { label: 'Gas Collected', value: number(summary.treasury_gas_collected) },
         { label: 'Active Providers', value: number(summary.active_providers) },
         { label: 'Active Nodes', value: number(summary.active_nodes) },
+        { label: 'Validators Online', value: number(summary.validators_online) },
+        { label: 'Schedulers Online', value: number(summary.scheduler_nodes_online) },
+        { label: 'Assignment Nodes', value: number(summary.assignment_nodes_online) },
+        { label: 'Compute Nodes', value: number(summary.compute_nodes_online) },
         { label: 'Target TPS (tokens)', value: number(summary.target_tokens_per_sec) },
         { label: 'Peak TPS Observed', value: number(summary.peak_tokens_per_sec) },
         { label: 'Tokens Processed', value: number(summary.total_tokens_processed) },
@@ -204,6 +212,7 @@
         { label: 'Token Definitions', value: number(summary.total_custom_tokens) },
         { label: 'Platform Tokens', value: number(summary.platform_token_count) },
         { label: 'Contract Events', value: number(summary.contract_events) },
+        { label: 'Min Validator Stake (AIA)', value: number(summary.min_validator_stake) },
       ];
       document.getElementById('summary').innerHTML = cards
         .map(
@@ -262,6 +271,8 @@
           (node) => {
             const hardware = node.hardware || {};
             const metrics = node.metrics || {};
+            const rawRole = (node.role || 'compute').toString();
+            const roleLabel = rawRole.toUpperCase();
             const gpuModel = [hardware.gpu_vendor, hardware.gpu_model]
               .filter(Boolean)
               .join(' ');
@@ -302,15 +313,35 @@
               `Segments: ${node.task_segments_completed || 0}`,
               `Weight: ${weight}`,
             ].join('<br/>');
+            const coordination = [];
+            const isScheduler = rawRole === 'scheduler';
+            const isAssignment = rawRole === 'assignment';
+            if (
+              typeof node.scheduler_jobs_executed === 'number' &&
+              (node.scheduler_jobs_executed > 0 || isScheduler)
+            ) {
+              coordination.push(`Scheduled: ${node.scheduler_jobs_executed}`);
+            }
+            if (
+              typeof node.assignment_jobs_generated === 'number' &&
+              (node.assignment_jobs_generated > 0 || isAssignment)
+            ) {
+              coordination.push(`Assigned: ${node.assignment_jobs_generated}`);
+            }
+            const coordinationInfo = coordination.length
+              ? coordination.join('<br/>')
+              : '—';
             return `
               <tr class="border-b border-gray-700">
                 <td class="px-4 py-2">${node.id}</td>
                 <td class="px-4 py-2">${node.owner}</td>
                 <td class="px-4 py-2">${node.region}</td>
+                <td class="px-4 py-2">${roleLabel}</td>
                 <td class="px-4 py-2 text-sm leading-5">${hardwareInfo}</td>
                 <td class="px-4 py-2 text-sm leading-5">${utilization}</td>
                 <td class="px-4 py-2 text-sm leading-5">${network}</td>
                 <td class="px-4 py-2 text-sm leading-5">${taskShare}</td>
+                <td class="px-4 py-2 text-sm leading-5">${coordinationInfo}</td>
                 <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
               </tr>
             `;
@@ -341,6 +372,8 @@
                   )
                   .join('<br/>')
               : '-';
+          const assignmentNode = task.assignment_node_id || '-';
+          const schedulerNode = task.scheduler_node_id || '-';
           return `
             <tr class="border-b border-gray-700">
               <td class="px-4 py-2">${task.id}</td>
@@ -353,6 +386,8 @@
               <td class="px-4 py-2">${task.winning_provider || '-'}</td>
               <td class="px-4 py-2">${task.completed ? 'Yes' : 'No'}</td>
               <td class="px-4 py-2">${task.preferred_region || '-'}</td>
+              <td class="px-4 py-2">${assignmentNode}</td>
+              <td class="px-4 py-2">${schedulerNode}</td>
               <td class="px-4 py-2 text-sm">${scheduled}</td>
             </tr>
           `;

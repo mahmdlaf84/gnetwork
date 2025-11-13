@@ -413,6 +413,8 @@ struct RegisterNodeRequest {
     owner: String,
     region: String,
     llm_profile: ModelProfile,
+    #[serde(default)]
+    role: NodeRole,
     hardware: NodeHardware,
     metrics: Option<NodeMetrics>,
     fingerprint: Option<String>,
@@ -428,18 +430,32 @@ async fn register_node(
         owner: payload.owner,
         region: payload.region,
         llm_profile: payload.llm_profile,
+        role: payload.role,
         online: true,
         reputation: 0,
         registered_at: 0,
         fingerprint: payload.fingerprint.unwrap_or_default(),
         hardware: payload.hardware,
         metrics: payload.metrics.unwrap_or_default(),
+        task_slots_granted: 0,
+        task_segments_completed: 0,
+        decentralization_weight: 0.0,
+        scheduler_jobs_executed: 0,
+        assignment_jobs_generated: 0,
     };
-    let node = ledger.register_node(node);
-    if let Err(err) = ledger.persist() {
-        error!(?err, "failed to persist node registration");
+    match ledger.register_node(node) {
+        Ok(node) => {
+            if let Err(err) = ledger.persist() {
+                error!(?err, "failed to persist node registration");
+            }
+            (StatusCode::OK, Json(node)).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
     }
-    (StatusCode::OK, Json(node))
 }
 
 #[derive(Debug, Deserialize)]
@@ -509,16 +525,27 @@ async fn submit_task(
         mode,
         chat_prompt,
     );
-    let scheduled = ledger
+    let (scheduled, assignment_node_id, scheduler_node_id) = ledger
         .state
         .tasks
         .get(&task_id)
-        .map(|task| task.scheduled.clone())
-        .unwrap_or_default();
+        .map(|task| {
+            (
+                task.scheduled.clone(),
+                task.assignment_node_id.clone(),
+                task.scheduler_node_id.clone(),
+            )
+        })
+        .unwrap_or_else(|| (Vec::new(), None, None));
     if let Err(err) = ledger.persist() {
         error!(?err, "failed to persist task submission");
     }
-    Json(serde_json::json!({ "task_id": task_id, "scheduled": scheduled }))
+    Json(serde_json::json!({
+        "task_id": task_id,
+        "scheduled": scheduled,
+        "assignment_node": assignment_node_id,
+        "scheduler_node": scheduler_node_id
+    }))
 }
 
 #[derive(Debug, Deserialize)]

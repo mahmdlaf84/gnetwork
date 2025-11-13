@@ -3,7 +3,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
 use ledger::types::{
-    ContractRuntime, ModelProfile, NodeHardware, NodeMetrics, TaskMode, TokenKind, TransactionKind,
+    ContractRuntime, ModelProfile, NodeHardware, NodeMetrics, NodeRole, TaskMode, TokenKind,
+    TransactionKind,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -122,6 +123,9 @@ struct RegisterNodeArgs {
     /// Optional override for the derived hardware fingerprint
     #[arg(long)]
     fingerprint: Option<String>,
+    /// Node role: validator | compute | scheduler | assignment
+    #[arg(long, default_value = "compute")]
+    role: String,
 }
 
 #[derive(Args)]
@@ -736,15 +740,18 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
                 region,
                 llm_profile,
                 fingerprint,
+                role,
             } = args;
             let profile: ModelProfile =
                 serde_json::from_str(&llm_profile).context("invalid llm_profile JSON")?;
+            let role = NodeRole::from_str(&role).context("invalid node role")?;
             let (hardware, metrics) = capture_node_state();
             let fingerprint = derive_fingerprint(&hardware, &owner, fingerprint);
             let body = serde_json::json!({
                 "owner": owner,
                 "region": region,
                 "llm_profile": profile,
+                "role": role,
                 "hardware": hardware,
                 "metrics": metrics,
                 "fingerprint": fingerprint,

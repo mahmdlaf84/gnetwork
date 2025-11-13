@@ -53,6 +53,17 @@ Alternatively run the RPC binary directly:
 
 Use the standard CLI commands to inspect balances, register additional nodes, or submit tasks against the seeded infrastructure.
 
+## Node Roles and Stake Requirements
+
+GPANG distinguishes four decentralized node roles that collaborate to keep the network scalable and tamper-resistant:
+
+- **Validator nodes** cast HotStuff-style votes on each block. They must maintain at least `100,000,000` AIA staked before registration is accepted, guaranteeing economic skin-in-the-game.
+- **Compute nodes** execute user workloads, generate task proofs, and are the only nodes counted toward task slot fairness metrics.
+- **Scheduler nodes** receive plans from assignment nodes and fan tasks out to the highest-scoring compute providers while tracking how many jobs they coordinate.
+- **Assignment nodes** analyze global load, craft decentralized scheduling plans, and forward them to schedulers for execution.
+
+Every node shares a unified registration flow: select the appropriate role during `gpang node register` and the CLI will auto-discover hardware metrics, GPU vendor details (NVIDIA, AMD, or Apple), and stream them to the ledger. Explore role-specific counts, validator stake thresholds, and coordination statistics from the web dashboard summary cards.
+
 ## CLI Usage
 
 ```bash
@@ -85,6 +96,7 @@ Register a node and submit a task:
 ./scripts/gpang node register \
   --owner alice \
   --region AP-SEA \
+  --role compute \
   --llm-profile '{"model_id":"qwen2.5-7b","quant":"int4","max_ctx":8192,"vram_req_gb":12,"throughput_tok_s":220000}'
 
 ./scripts/gpang task submit \
@@ -130,6 +142,8 @@ Mint tokens and stake:
 ./scripts/gpang account mint --to alice --token AIA --amount 100000
 ./scripts/gpang account stake --owner alice --amount 50000
 ```
+
+To promote a validator, stake the required AIA first and then register with `--role validator`. Registrations fail fast if the owner lacks the minimum bonded balance, ensuring validators always secure the chain with collateral.
 
 Deploy and exercise a smart contract:
 
