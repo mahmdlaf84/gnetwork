@@ -131,6 +131,13 @@ Mint tokens and stake:
 ./scripts/gpang account stake --owner alice --amount 50000
 ```
 
+## Gas Accounting & Zero-Proof Validation
+
+- **Universal gas metering** — Every transaction now consumes intrinsic gas units that reflect its execution complexity (e.g. transfers cost 25,000 units, task-proof commits cost 55,000 units). The RPC layer estimates the limit automatically, but advanced operators can override `gas_price`, `gas_limit`, or `gas_payer` when calling the JSON API. Ensure the payer holds at least `gas_price * intrinsic_gas` AIA before submitting very small transactions (minting credits the balance first, then deducts gas).
+- **Treasury funding** — Gas fees are denominated in AIA, deducted from the payer after the state transition is applied, and routed to the treasury. The explorer surfaces the running `gas_collected` counter alongside the base AIA treasury balance so network operators can audit utilization.
+- **Deterministic zero proofs** — Each transaction carries a `zero_proof` object that hashes the payload, gas metadata, and payer into a deterministic digest. The ledger re-computes and verifies this digest before accepting a transaction, providing lightweight tamper detection without external cryptography libraries.
+- **Automatic payer inference** — By default the RPC service infers a payer (e.g. `from` on transfers, provider owners on segment receipts) so CLI users are not forced to pass extra flags, while power users can still provide explicit overrides for multi-account workflows.
+
 ## Explorer
 
 Open `explorer/index.html` in a browser. The dashboard polls the REST API every 5 seconds to visualize blocks, providers, nodes, tasks, and treasury balances.
@@ -144,14 +151,14 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 - `GET /nodes` — Registered nodes
 - `GET /tasks` — Task ledger
 - `GET /treasury` — Treasury balances
-- `POST /tx` — Submit any token transaction (`TransactionKind` payload)
+- `POST /tx` — Submit any token transaction (`TransactionKind` payload plus optional `gas_price`, `gas_limit`, `gas_payer` overrides)
 - `POST /provider/upsert` — Register or update provider metadata
 - `POST /provider/models` — Configure provider model profiles
 - `POST /provider/heartbeat` — Refresh provider heartbeat
 - `POST /node/register` — Register node metadata
 - `POST /node/status` — Update node online state
 - `POST /task/submit` — Submit a new inference task (supports `mode` = `batch` or `chat` plus optional `chat_prompt`, returns scheduler hints)
-- `POST /consensus/task-proof` — Publish a task-proof commitment used for block production (accepts optional `node_id`, `output_digest`, and `chat_response` fields)
+- `POST /consensus/task-proof` — Publish a task-proof commitment used for block production (accepts optional `node_id`, `output_digest`, `chat_response`, and gas override fields)
 
 ## Consensus Loop
 

@@ -10,8 +10,12 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use ledger::{current_timestamp, types::*, Ledger, NetworkSummary, DEFAULT_LEDGER_FILE};
+use ledger::{
+    build_transaction, current_timestamp, types::*, Ledger, NetworkSummary, DEFAULT_LEDGER_FILE,
+    MIN_GAS_PRICE,
+};
 use serde::Deserialize;
+use serde_json::json;
 use tokio::{signal, sync::Mutex};
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
@@ -201,17 +205,79 @@ async fn get_treasury(State(state): State<AppState>) -> Json<Treasury> {
 #[derive(Debug, Deserialize)]
 struct NewTransactionRequest {
     kind: TransactionKind,
+    #[serde(default)]
+    gas_price: Option<u64>,
+    #[serde(default)]
+    gas_limit: Option<u64>,
+    #[serde(default)]
+    gas_payer: Option<String>,
+}
+
+fn infer_gas_payer(kind: &TransactionKind, ledger: &Ledger) -> Option<String> {
+    match kind {
+        TransactionKind::Mint { to, .. } => Some(to.clone()),
+        TransactionKind::Burn { from, .. } => Some(from.clone()),
+        TransactionKind::Transfer { from, .. } => Some(from.clone()),
+        TransactionKind::Stake { owner, .. } => Some(owner.clone()),
+        TransactionKind::Airdrop { to, .. } => Some(to.clone()),
+        TransactionKind::Payout { to, .. } => Some(to.clone()),
+        TransactionKind::SegmentReceipt { provider_id, .. } => ledger
+            .state
+            .providers
+            .get(provider_id)
+            .map(|provider| provider.owner.clone())
+            .or_else(|| Some(provider_id.clone())),
+        TransactionKind::ChatResult { task_id, .. } => ledger
+            .state
+            .tasks
+            .get(task_id)
+            .map(|task| task.owner.clone()),
+        TransactionKind::TaskProofCommit { proof } => {
+            if let Some(node_id) = proof.node_id.as_deref() {
+                if let Some(node) = ledger.state.nodes.get(node_id) {
+                    return Some(node.owner.clone());
+                }
+            }
+            ledger
+                .state
+                .providers
+                .get(&proof.provider_id)
+                .map(|provider| provider.owner.clone())
+                .or_else(|| Some(proof.provider_id.clone()))
+        }
+    }
 }
 
 async fn submit_transaction(
     State(state): State<AppState>,
     Json(payload): Json<NewTransactionRequest>,
 ) -> impl IntoResponse {
-    let tx = Transaction {
-        id: new_transaction_id("tx"),
-        timestamp: current_timestamp(),
-        kind: payload.kind,
+    let mut ledger = state.ledger.lock().await;
+    let mut kind = payload.kind;
+    let gas_price = payload.gas_price.unwrap_or(MIN_GAS_PRICE);
+    let gas_limit = payload.gas_limit;
+    let gas_payer = payload
+        .gas_payer
+        .or_else(|| infer_gas_payer(&kind, &ledger));
+    let gas_payer = match gas_payer {
+        Some(payer) => Some(payer),
+        None => {
+            drop(ledger);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unable to determine gas payer" })),
+            );
+        }
     };
+    let tx = build_transaction(
+        new_transaction_id("tx"),
+        current_timestamp(),
+        kind,
+        gas_payer,
+        gas_price,
+        gas_limit,
+    );
+    drop(ledger);
     let mut mempool = state.mempool.lock().await;
     mempool.push(tx.clone());
     (StatusCode::ACCEPTED, Json(tx))
@@ -447,6 +513,12 @@ struct TaskProofRequest {
     output_digest: Option<String>,
     #[serde(default)]
     chat_response: Option<String>,
+    #[serde(default)]
+    gas_price: Option<u64>,
+    #[serde(default)]
+    gas_limit: Option<u64>,
+    #[serde(default)]
+    gas_payer: Option<String>,
 }
 
 async fn submit_task_proof(
@@ -466,27 +538,48 @@ async fn submit_task_proof(
         node_id,
         output_digest,
         chat_response,
+        gas_price,
+        gas_limit,
+        gas_payer,
     } = payload;
-    let tx = Transaction {
-        id: new_transaction_id("task-proof"),
-        timestamp: current_timestamp(),
-        kind: TransactionKind::TaskProofCommit {
-            proof: TaskProof {
-                round,
-                task_id,
-                segment_id,
-                provider_id,
-                latency_ms,
-                throughput_tok_s,
-                tokens_processed,
-                region,
-                signature,
-                node_id,
-                output_digest,
-                chat_response,
-            },
-        },
+    let proof = TaskProof {
+        round,
+        task_id,
+        segment_id,
+        provider_id,
+        latency_ms,
+        throughput_tok_s,
+        tokens_processed,
+        region,
+        signature,
+        node_id,
+        output_digest,
+        chat_response,
     };
+    let mut ledger = state.ledger.lock().await;
+    let kind = TransactionKind::TaskProofCommit { proof };
+    let gas_price = gas_price.unwrap_or(MIN_GAS_PRICE);
+    let gas_limit = gas_limit;
+    let gas_payer = gas_payer.or_else(|| infer_gas_payer(&kind, &ledger));
+    let gas_payer = match gas_payer {
+        Some(payer) => Some(payer),
+        None => {
+            drop(ledger);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unable to determine gas payer" })),
+            );
+        }
+    };
+    let tx = build_transaction(
+        new_transaction_id("task-proof"),
+        current_timestamp(),
+        kind,
+        gas_payer,
+        gas_price,
+        gas_limit,
+    );
+    drop(ledger);
     let mut mempool = state.mempool.lock().await;
     mempool.push(tx.clone());
     (StatusCode::ACCEPTED, Json(tx))

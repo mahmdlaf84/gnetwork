@@ -72,11 +72,55 @@ pub enum TransactionKind {
 }
 
 /// Transaction wrapper storing metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Transaction {
     pub id: String,
     pub timestamp: u64,
     pub kind: TransactionKind,
+    pub gas_payer: Option<String>,
+    pub gas_limit: u64,
+    pub gas_price: u64,
+    pub gas_used: u64,
+    pub zero_proof: Option<ZeroProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ZeroProof {
+    pub scheme: String,
+    pub statement: String,
+    pub digest: String,
+}
+
+impl ZeroProof {
+    pub fn new(scheme: impl Into<String>, statement: impl Into<String>) -> Self {
+        let scheme = scheme.into();
+        let statement = statement.into();
+        let digest = Self::hash(&scheme, &statement);
+        Self {
+            scheme,
+            statement,
+            digest,
+        }
+    }
+
+    fn hash(scheme: &str, statement: &str) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        scheme.hash(&mut hasher);
+        statement.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    pub fn verify(&self) -> bool {
+        !self.scheme.is_empty()
+            && !self.statement.is_empty()
+            && !self.digest.is_empty()
+            && Self::hash(&self.scheme, &self.statement) == self.digest
+    }
 }
 
 /// Account level information.
@@ -290,6 +334,7 @@ pub struct Treasury {
     pub fee_bps: u64,
     pub reward_bps: u64,
     pub low_tier_discount_bps: u64,
+    pub gas_collected: u64,
 }
 
 impl Default for Treasury {
@@ -301,6 +346,7 @@ impl Default for Treasury {
             fee_bps: 500,
             reward_bps: 200,
             low_tier_discount_bps: 1000,
+            gas_collected: 0,
         }
     }
 }
@@ -311,6 +357,7 @@ impl Treasury {
             aia_balance: aia,
             work_balance: work,
             stor_balance: stor,
+            gas_collected: 0,
             ..Self::default()
         }
     }

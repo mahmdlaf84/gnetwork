@@ -22,8 +22,14 @@ pub mod types;
 use types::{
     Account, Block, ChatResponse, LedgerState, ModelProfile, Node, NodeHardware, NodeMetrics,
     Provider, ScheduledProvider, Task, TaskMode, TaskProof, TaskSegment, TokenKind, Transaction,
-    TransactionKind,
+    TransactionKind, ZeroProof,
 };
+
+/// Default scheme label for synthesized zero proofs.
+pub const ZERO_PROOF_SCHEME: &str = "gpang-zero-proof";
+
+/// Minimum gas price accepted by the ledger.
+pub const MIN_GAS_PRICE: u64 = 1;
 
 /// Returns the current Unix timestamp in milliseconds.
 pub fn current_timestamp() -> u64 {
@@ -35,6 +41,75 @@ pub fn current_timestamp() -> u64 {
 
 /// Default persistence file name.
 pub const DEFAULT_LEDGER_FILE: &str = "ledger_v35.json";
+
+/// Returns the intrinsic gas cost for the provided transaction kind.
+pub fn intrinsic_gas_cost(kind: &TransactionKind) -> u64 {
+    match kind {
+        TransactionKind::Mint { .. } => 21_000,
+        TransactionKind::Burn { .. } => 20_000,
+        TransactionKind::Transfer { .. } => 25_000,
+        TransactionKind::Stake { .. } => 28_000,
+        TransactionKind::Airdrop { .. } => 22_000,
+        TransactionKind::Payout { .. } => 24_000,
+        TransactionKind::SegmentReceipt { .. } => 40_000,
+        TransactionKind::ChatResult { .. } => 36_000,
+        TransactionKind::TaskProofCommit { .. } => 55_000,
+    }
+}
+
+fn zero_proof_statement(
+    kind: &TransactionKind,
+    gas_payer: Option<&str>,
+    gas_limit: u64,
+    gas_price: u64,
+) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "kind": kind,
+        "gas_payer": gas_payer,
+        "gas_limit": gas_limit,
+        "gas_price": gas_price
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Synthesizes a deterministic zero proof for the transaction metadata.
+pub fn synthesize_zero_proof(
+    kind: &TransactionKind,
+    gas_payer: Option<&str>,
+    gas_limit: u64,
+    gas_price: u64,
+) -> ZeroProof {
+    let statement = zero_proof_statement(kind, gas_payer, gas_limit, gas_price);
+    ZeroProof::new(ZERO_PROOF_SCHEME, statement)
+}
+
+/// Helper for constructing transactions with canonical gas and zero proof metadata.
+pub fn build_transaction(
+    id: String,
+    timestamp: u64,
+    kind: TransactionKind,
+    gas_payer: Option<String>,
+    gas_price: u64,
+    gas_limit: Option<u64>,
+) -> Transaction {
+    let intrinsic = intrinsic_gas_cost(&kind);
+    let mut limit = gas_limit.unwrap_or(intrinsic);
+    if limit < intrinsic {
+        limit = intrinsic;
+    }
+    let price = gas_price.max(MIN_GAS_PRICE);
+    let proof = synthesize_zero_proof(&kind, gas_payer.as_deref(), limit, price);
+    Transaction {
+        id,
+        timestamp,
+        kind,
+        gas_payer,
+        gas_limit: limit,
+        gas_price: price,
+        gas_used: intrinsic,
+        zero_proof: Some(proof),
+    }
+}
 
 /// Errors that can be produced by the ledger.
 #[derive(Debug, Error)]
@@ -144,6 +219,58 @@ impl Ledger {
             )));
         }
         *balance = new_value as u64;
+        Ok(())
+    }
+
+    fn ensure_zero_proof(&self, tx: &Transaction) -> Result<(), LedgerError> {
+        let proof = tx
+            .zero_proof
+            .as_ref()
+            .ok_or_else(|| LedgerError::InvalidTransaction("missing zero proof".into()))?;
+        let expected = zero_proof_statement(
+            &tx.kind,
+            tx.gas_payer.as_deref(),
+            tx.gas_limit,
+            tx.gas_price,
+        );
+        if proof.statement != expected || !proof.verify() {
+            return Err(LedgerError::InvalidTransaction(
+                "zero proof verification failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn charge_gas(&mut self, tx: &Transaction) -> Result<(), LedgerError> {
+        self.ensure_zero_proof(tx)?;
+        if tx.gas_limit == 0 {
+            return Err(LedgerError::InvalidTransaction(
+                "gas limit must be greater than zero".into(),
+            ));
+        }
+        if tx.gas_price < MIN_GAS_PRICE {
+            return Err(LedgerError::InvalidTransaction(format!(
+                "gas price {} below minimum {}",
+                tx.gas_price, MIN_GAS_PRICE
+            )));
+        }
+        let intrinsic = intrinsic_gas_cost(&tx.kind);
+        if tx.gas_limit < intrinsic {
+            return Err(LedgerError::InvalidTransaction(format!(
+                "gas limit {} below intrinsic {}",
+                tx.gas_limit, intrinsic
+            )));
+        }
+        let gas_used = intrinsic;
+        let fee = gas_used.saturating_mul(tx.gas_price);
+        let payer = tx
+            .gas_payer
+            .as_ref()
+            .ok_or_else(|| LedgerError::InvalidTransaction("missing gas payer".into()))?;
+        let account = self.get_or_create_account(payer);
+        Self::adjust_balance(account, &TokenKind::AIA, -(fee as i128))?;
+        self.state.treasury.aia_balance = self.state.treasury.aia_balance.saturating_add(fee);
+        self.state.treasury.gas_collected = self.state.treasury.gas_collected.saturating_add(fee);
         Ok(())
     }
 
@@ -404,6 +531,7 @@ impl Ledger {
                 self.record_task_proof(proof.clone())?;
             }
         }
+        self.charge_gas(tx)?;
         Ok(())
     }
 
@@ -577,16 +705,20 @@ impl Ledger {
             if share == 0 {
                 continue;
             }
-            let tx = Transaction {
-                id: format!("block-reward-{}-{}", now, account.id),
-                timestamp: now,
-                kind: TransactionKind::Payout {
-                    to: account.id.clone(),
-                    token: TokenKind::AIA,
-                    amount: share,
-                    task_id: "block_reward".into(),
-                },
+            let kind = TransactionKind::Payout {
+                to: account.id.clone(),
+                token: TokenKind::AIA,
+                amount: share,
+                task_id: "block_reward".into(),
             };
+            let tx = build_transaction(
+                format!("block-reward-{}-{}", now, account.id),
+                now,
+                kind,
+                Some(account.id.clone()),
+                MIN_GAS_PRICE,
+                None,
+            );
             payouts.push(tx);
         }
         Ok(payouts)
@@ -779,15 +911,19 @@ impl Ledger {
             .collect::<Vec<_>>();
         contributors.sort();
         contributors.dedup();
-        Some(Transaction {
-            id: format!("chat-result-{}-{}", task_id, timestamp),
+        let kind = TransactionKind::ChatResult {
+            task_id: task_id.to_string(),
+            aggregate,
+            contributors,
+        };
+        Some(build_transaction(
+            format!("chat-result-{}-{}", task_id, timestamp),
             timestamp,
-            kind: TransactionKind::ChatResult {
-                task_id: task_id.to_string(),
-                aggregate,
-                contributors,
-            },
-        })
+            kind,
+            Some(task.owner.clone()),
+            MIN_GAS_PRICE,
+            None,
+        ))
     }
 
     fn record_task_proof(&mut self, proof: TaskProof) -> Result<(), LedgerError> {
@@ -875,29 +1011,43 @@ impl Ledger {
                 if let Some(node_id) = best.node_id.as_deref() {
                     self.apply_task_share_for_node(node_id);
                 }
-                let receipt = Transaction {
-                    id: format!("segment-{}-{}", task_id, best.segment_id),
-                    timestamp: current_timestamp(),
-                    kind: TransactionKind::SegmentReceipt {
-                        task_id: task_id.clone(),
-                        segment_id: best.segment_id.clone(),
-                        provider_id: best.provider_id.clone(),
-                        tokens: best.tokens_processed,
-                        latency_ms: best.latency_ms,
-                        reward,
-                    },
+                let provider_owner = self
+                    .state
+                    .providers
+                    .get(&best.provider_id)
+                    .map(|p| p.owner.clone())
+                    .unwrap_or_else(|| best.provider_id.clone());
+                let receipt_kind = TransactionKind::SegmentReceipt {
+                    task_id: task_id.clone(),
+                    segment_id: best.segment_id.clone(),
+                    provider_id: best.provider_id.clone(),
+                    tokens: best.tokens_processed,
+                    latency_ms: best.latency_ms,
+                    reward,
                 };
+                let receipt = build_transaction(
+                    format!("segment-{}-{}", task_id, best.segment_id),
+                    current_timestamp(),
+                    receipt_kind,
+                    Some(provider_owner.clone()),
+                    MIN_GAS_PRICE,
+                    None,
+                );
                 outputs.push(receipt);
-                let payout = Transaction {
-                    id: format!("payout-{}-{}", task_id, best.provider_id),
-                    timestamp: current_timestamp(),
-                    kind: TransactionKind::Payout {
-                        to: best.provider_id.clone(),
-                        token: TokenKind::AIA,
-                        amount: reward,
-                        task_id: task_id.clone(),
-                    },
+                let payout_kind = TransactionKind::Payout {
+                    to: best.provider_id.clone(),
+                    token: TokenKind::AIA,
+                    amount: reward,
+                    task_id: task_id.clone(),
                 };
+                let payout = build_transaction(
+                    format!("payout-{}-{}", task_id, best.provider_id),
+                    current_timestamp(),
+                    payout_kind,
+                    Some(provider_owner),
+                    MIN_GAS_PRICE,
+                    None,
+                );
                 outputs.push(payout);
                 if let Some(task) = self.state.tasks.get_mut(&task_id) {
                     task.winning_provider = Some(best.provider_id.clone());
@@ -939,6 +1089,7 @@ impl Ledger {
 pub struct NetworkSummary {
     pub block_height: u64,
     pub treasury_aia: u64,
+    pub treasury_gas_collected: u64,
     pub active_providers: usize,
     pub active_nodes: usize,
     pub total_tasks: usize,
@@ -962,6 +1113,7 @@ impl From<&LedgerState> for NetworkSummary {
         Self {
             block_height: state.blocks.len() as u64,
             treasury_aia: state.treasury.aia_balance,
+            treasury_gas_collected: state.treasury.gas_collected,
             active_providers,
             active_nodes,
             total_tasks: state.tasks.len(),
