@@ -291,6 +291,7 @@
               memorySummary,
               gpuMemory,
               node.fingerprint ? `Fingerprint ${node.fingerprint}` : null,
+              node.nft_token_id ? `NFT ${node.nft_token_id}` : null,
               node.llm_profile
                 ? `LLM ${node.llm_profile.model_id} @ ${node.llm_profile.throughput_tok_s.toLocaleString()} tps`
                 : null,

@@ -79,7 +79,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/nodes", get(list_nodes))
         .route("/node/:node_id", get(get_node))
         .route("/node/:node_id/earnings", get(get_node_earnings))
+        .route("/node/:node_id/nft", get(get_node_nft))
         .route("/accounts/:account_id/nodes", get(list_account_nodes))
+        .route(
+            "/accounts/:account_id/node-nfts",
+            get(list_account_node_nfts),
+        )
+        .route("/node-nfts", get(list_node_nfts))
         .route("/tasks", get(list_tasks))
         .route("/contracts", get(list_contracts))
         .route("/contracts/events", get(list_contract_events))
@@ -214,6 +220,21 @@ async fn get_node(State(state): State<AppState>, Path(node_id): Path<String>) ->
     }
 }
 
+async fn get_node_nft(
+    State(state): State<AppState>,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    match ledger.node_nft_by_node(&node_id) {
+        Some(nft) => (StatusCode::OK, Json(nft)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "node nft not found", "node_id": node_id })),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(Serialize)]
 struct NodeEarningsView {
     node_id: String,
@@ -277,6 +298,32 @@ async fn list_account_nodes(
         nodes,
     };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+#[derive(Serialize)]
+struct AccountNodeNftsResponse {
+    account_id: String,
+    total_nfts: usize,
+    nfts: Vec<NodeNft>,
+}
+
+async fn list_account_node_nfts(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+) -> impl IntoResponse {
+    let ledger = state.ledger.lock().await;
+    let nfts = ledger.node_nfts_for_owner(Some(&account_id));
+    let response = AccountNodeNftsResponse {
+        account_id,
+        total_nfts: nfts.len(),
+        nfts,
+    };
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn list_node_nfts(State(state): State<AppState>) -> Json<Vec<NodeNft>> {
+    let ledger = state.ledger.lock().await;
+    Json(ledger.node_nfts_for_owner(None))
 }
 
 async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {

@@ -2,6 +2,7 @@
   "accounts": {},
   "providers": {},
   "nodes": {},
+  "node_nfts": {},
   "tasks": {},
   "blocks": [],
   "treasury": {
@@ -16,6 +17,7 @@
   },
   "next_task_id": 1,
   "next_node_id": 1,
+  "next_node_nft_id": 1,
   "pending_task_proofs": [],
   "network_capacity": {
     "consensus_round": 0,

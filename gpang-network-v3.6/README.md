@@ -64,6 +64,8 @@ GPANG distinguishes four decentralized node roles that collaborate to keep the n
 
 Every node shares a unified registration flow: select the appropriate role during `gpang node register` and the CLI will auto-discover hardware metrics, GPU vendor details (NVIDIA, AMD, or Apple), and stream them to the ledger. Explore role-specific counts, validator stake thresholds, and coordination statistics from the web dashboard summary cards.
 
+Each successful registration also mints an immutable node NFT that records the owner, fingerprint, hardware profile, and role. Operators can audit their node-backed NFTs via the CLI (`gpang node nft` / `gpang node nft-list`) or the REST API (`/node/:node_id/nft`, `/node-nfts`, `/accounts/:account_id/node-nfts`).
+
 ## CLI Usage
 
 ```bash
@@ -122,6 +124,9 @@ Register a node and submit a task:
 ./scripts/gpang node list --owner alice
 ./scripts/gpang node show --node-id node-1
 ./scripts/gpang node earnings --node-id node-1
+./scripts/gpang node nft --node-id node-1
+./scripts/gpang node nft-list
+./scripts/gpang node nft-list --owner alice
 
 # Submit a task-proof commitment to advance consensus
 ./scripts/gpang task proof \
@@ -224,7 +229,10 @@ Open `explorer/index.html` in a browser. The dashboard polls the REST API every 
 - `GET /nodes` — Registered nodes
 - `GET /node/:node_id` — Detailed node record with hardware, metrics, and role data
 - `GET /node/:node_id/earnings` — Summary of cumulative node rewards and segment history
+- `GET /node/:node_id/nft` — NFT asset representing the node’s immutable on-chain registration
 - `GET /accounts/:account_id/nodes` — Nodes registered by a specific account plus aggregated earnings
+- `GET /accounts/:account_id/node-nfts` — Node NFTs owned by an account with aggregate counts
+- `GET /node-nfts` — All node NFTs minted on the network
 - `GET /tasks` — Task ledger
 - `GET /contracts` — Smart contract registry and metadata
 - `GET /contracts/events` — Immutable execution log entries

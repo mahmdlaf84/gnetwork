@@ -400,6 +400,7 @@ pub struct Node {
     pub reputation: u64,
     pub registered_at: u64,
     pub fingerprint: String,
+    pub nft_token_id: String,
     pub hardware: NodeHardware,
     pub metrics: NodeMetrics,
     pub task_slots_granted: u64,
@@ -411,6 +412,19 @@ pub struct Node {
     pub total_rewards: u64,
     #[serde(default)]
     pub last_reward_at: u64,
+}
+
+/// NFT asset that backs a node registration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeNft {
+    pub token_id: String,
+    pub owner: String,
+    pub node_id: String,
+    pub minted_at: u64,
+    pub fingerprint: String,
+    pub region: String,
+    pub role: NodeRole,
+    pub hardware: NodeHardware,
 }
 
 /// Captures the outcome of a FlashRace segment.
@@ -634,12 +648,16 @@ pub struct LedgerState {
     pub accounts: HashMap<String, Account>,
     pub providers: HashMap<String, Provider>,
     pub nodes: HashMap<String, Node>,
+    #[serde(default)]
+    pub node_nfts: HashMap<String, NodeNft>,
     pub tasks: HashMap<String, Task>,
     pub blocks: Vec<Block>,
     pub treasury: Treasury,
     pub next_task_id: u64,
     #[serde(default = "default_next_node_id")]
     pub next_node_id: u64,
+    #[serde(default = "default_next_node_nft_id")]
+    pub next_node_nft_id: u64,
     pub pending_task_proofs: Vec<TaskProof>,
     pub network_capacity: NetworkCapacity,
     #[serde(default)]
@@ -660,11 +678,13 @@ impl Default for LedgerState {
             accounts: HashMap::new(),
             providers: HashMap::new(),
             nodes: HashMap::new(),
+            node_nfts: HashMap::new(),
             tasks: HashMap::new(),
             blocks: Vec::new(),
             treasury: Treasury::default(),
             next_task_id: 1,
             next_node_id: 1,
+            next_node_nft_id: 1,
             pending_task_proofs: Vec::new(),
             network_capacity: NetworkCapacity::default(),
             contracts: HashMap::new(),
@@ -677,6 +697,10 @@ impl Default for LedgerState {
 }
 
 fn default_next_node_id() -> u64 {
+    1
+}
+
+fn default_next_node_nft_id() -> u64 {
     1
 }
 
@@ -862,6 +886,7 @@ impl LedgerState {
             reputation: 990,
             registered_at: timestamp,
             fingerprint: "0xalpha".to_string(),
+            nft_token_id: "node-nft-1".to_string(),
             hardware: NodeHardware {
                 cpu_model: "AMD EPYC 9654".to_string(),
                 cpu_cores: 96,
@@ -906,6 +931,7 @@ impl LedgerState {
             reputation: 905,
             registered_at: timestamp,
             fingerprint: "0xbeta".to_string(),
+            nft_token_id: "node-nft-2".to_string(),
             hardware: NodeHardware {
                 cpu_model: "Intel Xeon Platinum 8490H".to_string(),
                 cpu_cores: 60,
@@ -950,6 +976,7 @@ impl LedgerState {
             reputation: 850,
             registered_at: timestamp,
             fingerprint: "0xscheduler".to_string(),
+            nft_token_id: "node-nft-3".to_string(),
             hardware: NodeHardware {
                 cpu_model: "AMD EPYC 7713".to_string(),
                 cpu_cores: 64,
@@ -994,6 +1021,7 @@ impl LedgerState {
             reputation: 920,
             registered_at: timestamp,
             fingerprint: "0xassignment".to_string(),
+            nft_token_id: "node-nft-4".to_string(),
             hardware: NodeHardware {
                 cpu_model: "Apple M2 Ultra".to_string(),
                 cpu_cores: 24,
@@ -1029,6 +1057,47 @@ impl LedgerState {
             last_reward_at: 0,
         };
 
+        let nft_alpha = NodeNft {
+            token_id: node_alpha.nft_token_id.clone(),
+            owner: node_alpha.owner.clone(),
+            node_id: node_alpha.id.clone(),
+            minted_at: node_alpha.registered_at,
+            fingerprint: node_alpha.fingerprint.clone(),
+            region: node_alpha.region.clone(),
+            role: node_alpha.role,
+            hardware: node_alpha.hardware.clone(),
+        };
+        let nft_beta = NodeNft {
+            token_id: node_beta.nft_token_id.clone(),
+            owner: node_beta.owner.clone(),
+            node_id: node_beta.id.clone(),
+            minted_at: node_beta.registered_at,
+            fingerprint: node_beta.fingerprint.clone(),
+            region: node_beta.region.clone(),
+            role: node_beta.role,
+            hardware: node_beta.hardware.clone(),
+        };
+        let nft_scheduler = NodeNft {
+            token_id: node_scheduler.nft_token_id.clone(),
+            owner: node_scheduler.owner.clone(),
+            node_id: node_scheduler.id.clone(),
+            minted_at: node_scheduler.registered_at,
+            fingerprint: node_scheduler.fingerprint.clone(),
+            region: node_scheduler.region.clone(),
+            role: node_scheduler.role,
+            hardware: node_scheduler.hardware.clone(),
+        };
+        let nft_assignment = NodeNft {
+            token_id: node_assignment.nft_token_id.clone(),
+            owner: node_assignment.owner.clone(),
+            node_id: node_assignment.id.clone(),
+            minted_at: node_assignment.registered_at,
+            fingerprint: node_assignment.fingerprint.clone(),
+            region: node_assignment.region.clone(),
+            role: node_assignment.role,
+            hardware: node_assignment.hardware.clone(),
+        };
+
         state.nodes.insert(node_alpha.id.clone(), node_alpha);
         state.nodes.insert(node_beta.id.clone(), node_beta);
         state
@@ -1037,8 +1106,19 @@ impl LedgerState {
         state
             .nodes
             .insert(node_assignment.id.clone(), node_assignment);
+        state
+            .node_nfts
+            .insert(nft_alpha.token_id.clone(), nft_alpha);
+        state.node_nfts.insert(nft_beta.token_id.clone(), nft_beta);
+        state
+            .node_nfts
+            .insert(nft_scheduler.token_id.clone(), nft_scheduler);
+        state
+            .node_nfts
+            .insert(nft_assignment.token_id.clone(), nft_assignment);
 
         state.next_node_id = 5;
+        state.next_node_nft_id = 5;
 
         state.treasury = Treasury::with_balances(900_000_000_000, 400_000_000_000, 150_000_000_000);
         state.network_capacity.target_tokens_per_sec = 10_000_000;

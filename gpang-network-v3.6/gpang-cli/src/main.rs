@@ -3,8 +3,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use colored::*;
 use ledger::types::{
-    ContractRuntime, ModelProfile, NodeHardware, NodeMetrics, NodeRole, TaskMode, TokenKind,
-    TransactionKind,
+    ContractRuntime, ModelProfile, Node, NodeHardware, NodeMetrics, NodeNft, NodeRole, TaskMode,
+    TokenKind, TransactionKind,
 };
 use reqwest::Client;
 use serde_json::{self, Value};
@@ -123,6 +123,16 @@ enum NodeCommand {
     Earnings {
         #[arg(long)]
         node_id: String,
+    },
+    /// Inspect the NFT asset backing a node registration
+    Nft {
+        #[arg(long)]
+        node_id: String,
+    },
+    /// List node NFTs, optionally filtered by owner account
+    NftList {
+        #[arg(long)]
+        owner: Option<String>,
     },
 }
 
@@ -777,8 +787,11 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
                 .send()
                 .await?
                 .error_for_status()?;
+            let registered: Node = res.json().await?;
             println!("{}", "Node registered".green());
-            println!("{}", res.text().await?);
+            println!("  {} {}", "Node ID:".cyan(), registered.id);
+            println!("  {} {}", "NFT Token:".cyan(), registered.nft_token_id);
+            println!("  {} {}", "Owner:".cyan(), registered.owner);
         }
         NodeCommand::Status(args) => {
             let metrics = if args.online {
@@ -842,6 +855,36 @@ async fn handle_node(client: &Client, rpc: &str, cmd: NodeCommand) -> Result<()>
                 "{}",
                 serde_json::to_string_pretty(&payload)
                     .context("failed to pretty print node earnings")?
+            );
+        }
+        NodeCommand::Nft { node_id } => {
+            let res = client
+                .get(format!("{}/node/{}/nft", rpc, node_id))
+                .send()
+                .await?
+                .error_for_status()?;
+            let nft: NodeNft = res.json().await?;
+            println!("{}", "Node NFT".green());
+            println!("  {} {}", "Token:".cyan(), nft.token_id);
+            println!("  {} {}", "Owner:".cyan(), nft.owner);
+            println!("  {} {}", "Node:".cyan(), nft.node_id);
+            println!("  {} {}", "Minted:".cyan(), nft.minted_at);
+            println!("  {} {}", "Region:".cyan(), nft.region);
+            println!("  {} {}", "Role:".cyan(), format!("{:?}", nft.role));
+            println!("  {} {}", "Fingerprint:".cyan(), nft.fingerprint);
+        }
+        NodeCommand::NftList { owner } => {
+            let url = if let Some(owner) = owner {
+                format!("{}/accounts/{}/node-nfts", rpc, owner)
+            } else {
+                format!("{}/node-nfts", rpc)
+            };
+            let res = client.get(url).send().await?.error_for_status()?;
+            let payload: Value = res.json().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload)
+                    .context("failed to pretty print node nft data")?
             );
         }
     }

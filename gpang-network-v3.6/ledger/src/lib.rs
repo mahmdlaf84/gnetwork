@@ -22,7 +22,7 @@ pub mod types;
 
 use types::{
     Account, Block, ChatResponse, ContractEvent, ContractRuntime, LedgerState, ModelProfile, Node,
-    NodeHardware, NodeMetrics, NodeRole, Provider, ScheduledProvider, SmartContract, Task,
+    NodeHardware, NodeMetrics, NodeNft, NodeRole, Provider, ScheduledProvider, SmartContract, Task,
     TaskMode, TaskProof, TaskSegment, TokenDefinition, TokenKind, Transaction, TransactionKind,
     ZeroProof,
 };
@@ -1105,7 +1105,11 @@ impl Ledger {
         node.assignment_jobs_generated = 0;
         node.total_rewards = 0;
         node.last_reward_at = 0;
+        let nft_token_id = self.allocate_node_nft_id();
+        node.nft_token_id = nft_token_id.clone();
+        let nft = Self::build_node_nft(nft_token_id, &node);
         self.state.nodes.insert(node.id.clone(), node.clone());
+        self.state.node_nfts.insert(node.nft_token_id.clone(), nft);
         self.recalculate_average_tasks();
         Ok(node)
     }
@@ -1122,6 +1126,49 @@ impl Ledger {
         hardware.os.hash(&mut hasher);
         owner.hash(&mut hasher);
         format!("0x{:016x}", hasher.finish())
+    }
+
+    fn allocate_node_nft_id(&mut self) -> String {
+        let token_id = format!("node-nft-{}", self.state.next_node_nft_id);
+        self.state.next_node_nft_id += 1;
+        token_id
+    }
+
+    fn build_node_nft(token_id: String, node: &Node) -> NodeNft {
+        NodeNft {
+            token_id,
+            owner: node.owner.clone(),
+            node_id: node.id.clone(),
+            minted_at: node.registered_at,
+            fingerprint: node.fingerprint.clone(),
+            region: node.region.clone(),
+            role: node.role,
+            hardware: node.hardware.clone(),
+        }
+    }
+
+    /// Fetches the NFT asset corresponding to a node identifier.
+    pub fn node_nft_by_node(&self, node_id: &str) -> Option<NodeNft> {
+        self.state
+            .node_nfts
+            .values()
+            .find(|nft| nft.node_id == node_id)
+            .cloned()
+    }
+
+    /// Fetches the NFT asset by its token identifier.
+    pub fn node_nft_by_token(&self, token_id: &str) -> Option<NodeNft> {
+        self.state.node_nfts.get(token_id).cloned()
+    }
+
+    /// Lists node NFTs, optionally filtered by owner account.
+    pub fn node_nfts_for_owner(&self, owner: Option<&str>) -> Vec<NodeNft> {
+        self.state
+            .node_nfts
+            .values()
+            .filter(|nft| owner.map(|o| nft.owner == o).unwrap_or(true))
+            .cloned()
+            .collect()
     }
 
     /// Submits a new task and returns the identifier.
