@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CLI_BINARY="${PROJECT_ROOT}/target/release/gpang-cli"
+
+cd "$PROJECT_ROOT"
+if [ ! -x "$CLI_BINARY" ]; then
+  cargo build -p gpang-cli --release
+fi
+
+exec "$CLI_BINARY" "$@"

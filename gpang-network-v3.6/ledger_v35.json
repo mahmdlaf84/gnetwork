@@ -1,0 +1,52 @@
+{
+  "accounts": {},
+  "providers": {},
+  "nodes": {},
+  "node_nfts": {},
+  "tasks": {},
+  "blocks": [],
+  "treasury": {
+    "aia_balance": 0,
+    "work_balance": 0,
+    "stor_balance": 0,
+    "fee_bps": 500,
+    "reward_bps": 200,
+    "low_tier_discount_bps": 1000,
+    "gas_collected": 0,
+    "custom_tokens": {}
+  },
+  "next_task_id": 1,
+  "next_node_id": 1,
+  "next_node_nft_id": 1,
+  "pending_task_proofs": [],
+  "network_capacity": {
+    "consensus_round": 0,
+    "tokens_processed": 0,
+    "target_tokens_per_sec": 12000000,
+    "effective_tps_target": 800000,
+    "max_parallel_nodes": 100000000,
+    "peak_observed_tokens_per_sec": 0,
+    "total_task_slots": 0,
+    "average_tasks_per_node": 0.0,
+    "target_block_interval_ms": 200,
+    "optimistic_block_interval_ms": 150,
+    "finality_min_ms": 300,
+    "finality_max_ms": 600,
+    "observed_block_interval_ms": 0,
+    "observed_tps": 0,
+    "last_finality_ms": 0,
+    "network_bandwidth_gbps": 40,
+    "validator_bandwidth_gbps": 10,
+    "active_validator_target": 1200,
+    "per_node_parallelism": 200000
+  },
+  "contracts": {},
+  "contract_events": [],
+  "token_definitions": {},
+  "next_contract_id": 1,
+  "platform_tokens": [],
+  "consensus_pipeline": {
+    "queue": [],
+    "last_finalized_height": 0
+  }
+}

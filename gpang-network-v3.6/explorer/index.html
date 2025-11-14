@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GPANG Network Explorer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/axios@1.6.7/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100">
+  <div class="container mx-auto px-4 py-8">
+    <h1 class="text-4xl font-bold mb-6">GPANG Network Explorer</h1>
+    <div id="summary" class="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-8"></div>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Recent Blocks</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Height</th>
+              <th class="px-4 py-2 text-left">Timestamp</th>
+              <th class="px-4 py-2 text-left">Transactions</th>
+            </tr>
+          </thead>
+          <tbody id="blocks"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Providers</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Region</th>
+              <th class="px-4 py-2 text-left">GPU</th>
+              <th class="px-4 py-2 text-left">Current Price</th>
+              <th class="px-4 py-2 text-left">Throughput</th>
+              <th class="px-4 py-2 text-left">Reputation</th>
+              <th class="px-4 py-2 text-left">Adaptive Score</th>
+            </tr>
+          </thead>
+          <tbody id="providers"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Nodes</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Region</th>
+              <th class="px-4 py-2 text-left">Role</th>
+              <th class="px-4 py-2 text-left">Hardware</th>
+              <th class="px-4 py-2 text-left">Utilization</th>
+              <th class="px-4 py-2 text-left">Network</th>
+              <th class="px-4 py-2 text-left">Task Share</th>
+              <th class="px-4 py-2 text-left">Coordination</th>
+              <th class="px-4 py-2 text-left">Online</th>
+            </tr>
+          </thead>
+          <tbody id="nodes"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Tasks</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Mode</th>
+              <th class="px-4 py-2 text-left">Tokens</th>
+              <th class="px-4 py-2 text-left">Segments</th>
+              <th class="px-4 py-2 text-left">Chat Responses</th>
+              <th class="px-4 py-2 text-left">Chat Summary</th>
+              <th class="px-4 py-2 text-left">Winner</th>
+              <th class="px-4 py-2 text-left">Completed</th>
+              <th class="px-4 py-2 text-left">Preferred Region</th>
+              <th class="px-4 py-2 text-left">Assignment Node</th>
+              <th class="px-4 py-2 text-left">Scheduler Node</th>
+              <th class="px-4 py-2 text-left">Scheduled</th>
+            </tr>
+          </thead>
+          <tbody id="tasks"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Smart Contracts</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">ID</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Name</th>
+              <th class="px-4 py-2 text-left">Runtime</th>
+              <th class="px-4 py-2 text-left">Program ID</th>
+              <th class="px-4 py-2 text-left">Code Hash</th>
+              <th class="px-4 py-2 text-left">Bytecode</th>
+              <th class="px-4 py-2 text-left">Deployed At</th>
+              <th class="px-4 py-2 text-left">Metadata</th>
+            </tr>
+          </thead>
+          <tbody id="contracts"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Contract Activity</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Event</th>
+              <th class="px-4 py-2 text-left">Contract</th>
+              <th class="px-4 py-2 text-left">Caller</th>
+              <th class="px-4 py-2 text-left">Method</th>
+              <th class="px-4 py-2 text-left">Payload Hash</th>
+              <th class="px-4 py-2 text-left">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody id="contract-events"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Token Registry</h2>
+      <div class="overflow-auto max-h-64 border border-gray-700 rounded">
+        <table class="min-w-full">
+          <thead class="bg-gray-800">
+            <tr>
+              <th class="px-4 py-2 text-left">Symbol</th>
+              <th class="px-4 py-2 text-left">Name</th>
+              <th class="px-4 py-2 text-left">Decimals</th>
+              <th class="px-4 py-2 text-left">Total Supply</th>
+              <th class="px-4 py-2 text-left">Owner</th>
+              <th class="px-4 py-2 text-left">Platform</th>
+              <th class="px-4 py-2 text-left">Contract</th>
+              <th class="px-4 py-2 text-left">Created</th>
+            </tr>
+          </thead>
+          <tbody id="tokens"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold mb-2">Treasury</h2>
+      <div id="treasury" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    </section>
+  </div>
+
+  <script>
+    const RPC = localStorage.getItem('gpang_rpc') || 'http://127.0.0.1:8080';
+
+    async function fetchJson(path) {
+      const url = `${RPC}${path}`;
+      const res = await axios.get(url);
+      return res.data;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function renderSummary(summary) {
+      const number = (value) =>
+        typeof value === 'number' ? value.toLocaleString() : value;
+      const cards = [
+        { label: 'Block Height', value: number(summary.block_height) },
+        { label: 'Consensus Round', value: number(summary.consensus_round) },
+        { label: 'Target Block Interval (ms)', value: number(summary.target_block_interval_ms) },
+        { label: 'Optimistic Interval (ms)', value: number(summary.optimistic_block_interval_ms) },
+        { label: 'Observed Block Interval (ms)', value: number(summary.observed_block_interval_ms) },
+        {
+          label: 'Finality Window (ms)',
+          value: `${number(summary.finality_min_ms)} - ${number(summary.finality_max_ms)}`,
+        },
+        { label: 'Last Finality (ms)', value: number(summary.last_finality_ms) },
+        { label: 'Effective TPS Target', value: number(summary.effective_tps_target) },
+        { label: 'Observed TPS', value: number(summary.observed_tps) },
+        { label: 'Target TPS (tokens)', value: number(summary.target_tokens_per_sec) },
+        { label: 'Peak Token TPS', value: number(summary.peak_tokens_per_sec) },
+        { label: 'Tokens Processed', value: number(summary.total_tokens_processed) },
+        { label: 'Network Bandwidth Target (Gbps)', value: number(summary.network_bandwidth_gbps) },
+        { label: 'Validator Bandwidth (Gbps)', value: number(summary.validator_bandwidth_gbps) },
+        { label: 'Active Validator Target', value: number(summary.active_validator_target) },
+        { label: 'Per-Node Parallelism', value: number(summary.per_node_parallelism) },
+        { label: 'Treasury AIA', value: number(summary.treasury_aia) },
+        { label: 'Gas Collected', value: number(summary.treasury_gas_collected) },
+        { label: 'Active Providers', value: number(summary.active_providers) },
+        { label: 'Active Nodes', value: number(summary.active_nodes) },
+        { label: 'Validators Online', value: number(summary.validators_online) },
+        { label: 'Schedulers Online', value: number(summary.scheduler_nodes_online) },
+        { label: 'Assignment Nodes', value: number(summary.assignment_nodes_online) },
+        { label: 'Compute Nodes', value: number(summary.compute_nodes_online) },
+        { label: 'Max Parallel Nodes', value: number(summary.max_parallel_nodes) },
+        { label: 'Total Tasks', value: number(summary.total_tasks) },
+        { label: 'Total Task Slots', value: number(summary.total_task_slots) },
+        {
+          label: 'Avg Tasks / Node',
+          value:
+            typeof summary.average_tasks_per_node === 'number'
+              ? summary.average_tasks_per_node.toFixed(2)
+              : '0.00',
+        },
+        { label: 'Contracts', value: number(summary.total_contracts) },
+        { label: 'Token Definitions', value: number(summary.total_custom_tokens) },
+        { label: 'Platform Tokens', value: number(summary.platform_token_count) },
+        { label: 'Contract Events', value: number(summary.contract_events) },
+        { label: 'Min Validator Stake (AIA)', value: number(summary.min_validator_stake) },
+      ];
+      document.getElementById('summary').innerHTML = cards
+        .map(
+          (card) => `
+            <div class="bg-gray-800 p-4 rounded shadow">
+              <div class="text-sm uppercase text-gray-400">${card.label}</div>
+              <div class="text-2xl font-bold">${card.value}</div>
+            </div>
+          `
+        )
+        .join('');
+    }
+
+    function renderBlocks(blocks) {
+      const rows = blocks
+        .slice(-10)
+        .reverse()
+        .map(
+          (block) => `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${block.height}</td>
+              <td class="px-4 py-2">${new Date(block.timestamp).toLocaleString()}</td>
+              <td class="px-4 py-2">${block.transactions.length}</td>
+            </tr>
+          `
+        )
+        .join('');
+      document.getElementById('blocks').innerHTML = rows;
+    }
+
+    function renderProviders(providers) {
+      const rows = providers
+        .map(
+          (provider) => {
+            const profile = provider.model_profiles[0];
+            return `
+              <tr class="border-b border-gray-700">
+                <td class="px-4 py-2">${provider.id}</td>
+                <td class="px-4 py-2">${provider.region}</td>
+                <td class="px-4 py-2">${provider.gpu_model}</td>
+                <td class="px-4 py-2">${provider.pricing.current_per_token || provider.pricing.base_per_token}</td>
+                <td class="px-4 py-2">${profile ? profile.throughput_tok_s : 'n/a'}</td>
+                <td class="px-4 py-2">${provider.reputation}</td>
+                <td class="px-4 py-2">${provider.throughput_score.toFixed ? provider.throughput_score.toFixed(0) : provider.throughput_score}</td>
+              </tr>
+            `;
+          }
+        )
+        .join('');
+      document.getElementById('providers').innerHTML = rows;
+    }
+
+    function renderNodes(nodes) {
+      const rows = nodes
+        .map(
+          (node) => {
+            const hardware = node.hardware || {};
+            const metrics = node.metrics || {};
+            const rawRole = (node.role || 'compute').toString();
+            const roleLabel = rawRole.toUpperCase();
+            const gpuModel = [hardware.gpu_vendor, hardware.gpu_model]
+              .filter(Boolean)
+              .join(' ');
+            const cpuSummary = hardware.cpu_model
+              ? `${hardware.cpu_model} (${hardware.cpu_cores || '?'}c/${hardware.cpu_threads || '?'}t)`
+              : 'Unknown CPU';
+            const memorySummary = hardware.memory_total_mb
+              ? `${(hardware.memory_total_mb / 1024).toFixed(1)} GB RAM`
+              : 'RAM n/a';
+            const gpuMemory = metrics.gpu_memory_total_mb
+              ? `GPU VRAM ${metrics.gpu_memory_used_mb || 0}/${metrics.gpu_memory_total_mb} MB`
+              : '';
+            const hardwareInfo = [
+              gpuModel || 'Unknown GPU',
+              cpuSummary,
+              memorySummary,
+              gpuMemory,
+              node.fingerprint ? `Fingerprint ${node.fingerprint}` : null,
+              node.nft_token_id ? `NFT ${node.nft_token_id}` : null,
+              node.llm_profile
+                ? `LLM ${node.llm_profile.model_id} @ ${node.llm_profile.throughput_tok_s.toLocaleString()} tps`
+                : null,
+            ]
+              .filter(Boolean)
+              .join('<br/>');
+            const utilization = [
+              `CPU: ${(metrics.cpu_usage_pct ?? 0).toFixed(1)}%`,
+              `GPU: ${(metrics.gpu_usage_pct ?? 0).toFixed(1)}%`,
+              `Mem: ${(metrics.memory_usage_pct ?? 0).toFixed(1)}%`,
+              `Disk: ${(metrics.disk_usage_pct ?? 0).toFixed(1)}%`,
+              `Load: ${(metrics.machine_load_one ?? 0).toFixed(2)} / ${(metrics.machine_load_five ?? 0).toFixed(2)} / ${(metrics.machine_load_fifteen ?? 0).toFixed(2)}`,
+            ].join('<br/>');
+            const network = `RX ${(metrics.network_rx_mbps ?? 0).toFixed(2)} Mbps<br/>TX ${(metrics.network_tx_mbps ?? 0).toFixed(2)} Mbps`;
+            const weight = typeof node.decentralization_weight === 'number'
+              ? node.decentralization_weight.toFixed(2)
+              : Number(node.decentralization_weight || 0).toFixed(2);
+            const taskShare = [
+              `Slots: ${node.task_slots_granted || 0}`,
+              `Segments: ${node.task_segments_completed || 0}`,
+              `Weight: ${weight}`,
+            ].join('<br/>');
+            const coordination = [];
+            const isScheduler = rawRole === 'scheduler';
+            const isAssignment = rawRole === 'assignment';
+            if (
+              typeof node.scheduler_jobs_executed === 'number' &&
+              (node.scheduler_jobs_executed > 0 || isScheduler)
+            ) {
+              coordination.push(`Scheduled: ${node.scheduler_jobs_executed}`);
+            }
+            if (
+              typeof node.assignment_jobs_generated === 'number' &&
+              (node.assignment_jobs_generated > 0 || isAssignment)
+            ) {
+              coordination.push(`Assigned: ${node.assignment_jobs_generated}`);
+            }
+            const coordinationInfo = coordination.length
+              ? coordination.join('<br/>')
+              : '—';
+            return `
+              <tr class="border-b border-gray-700">
+                <td class="px-4 py-2">${node.id}</td>
+                <td class="px-4 py-2">${node.owner}</td>
+                <td class="px-4 py-2">${node.region}</td>
+                <td class="px-4 py-2">${roleLabel}</td>
+                <td class="px-4 py-2 text-sm leading-5">${hardwareInfo}</td>
+                <td class="px-4 py-2 text-sm leading-5">${utilization}</td>
+                <td class="px-4 py-2 text-sm leading-5">${network}</td>
+                <td class="px-4 py-2 text-sm leading-5">${taskShare}</td>
+                <td class="px-4 py-2 text-sm leading-5">${coordinationInfo}</td>
+                <td class="px-4 py-2">${node.online ? 'Online' : 'Offline'}</td>
+              </tr>
+            `;
+          }
+        )
+        .join('');
+      document.getElementById('nodes').innerHTML = rows;
+    }
+
+    function renderTasks(tasks) {
+      const rows = tasks
+        .map((task) => {
+          const mode = (task.mode || 'batch').toString();
+          const modeLabel = mode.toUpperCase();
+          const chatResponses = Array.isArray(task.chat_responses)
+            ? task.chat_responses.length
+            : 0;
+          const chatSummary = task.chat_aggregate
+            ? escapeHtml(task.chat_aggregate).replace(/\n/g, '<br/>')
+            : '-';
+          const scheduled =
+            task.scheduled && task.scheduled.length
+              ? task.scheduled
+                  .slice(0, 3)
+                  .map(
+                    (entry) =>
+                      `${entry.provider_id} (${entry.score.toFixed(2)} / ${entry.max_tokens_per_sec.toLocaleString()} tps)`
+                  )
+                  .join('<br/>')
+              : '-';
+          const assignmentNode = task.assignment_node_id || '-';
+          const schedulerNode = task.scheduler_node_id || '-';
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${task.id}</td>
+              <td class="px-4 py-2">${task.owner}</td>
+              <td class="px-4 py-2">${modeLabel}</td>
+              <td class="px-4 py-2">${task.total_tokens}</td>
+              <td class="px-4 py-2">${task.segments.length}</td>
+              <td class="px-4 py-2">${chatResponses}</td>
+              <td class="px-4 py-2 text-sm leading-5">${chatSummary}</td>
+              <td class="px-4 py-2">${task.winning_provider || '-'}</td>
+              <td class="px-4 py-2">${task.completed ? 'Yes' : 'No'}</td>
+              <td class="px-4 py-2">${task.preferred_region || '-'}</td>
+              <td class="px-4 py-2">${assignmentNode}</td>
+              <td class="px-4 py-2">${schedulerNode}</td>
+              <td class="px-4 py-2 text-sm">${scheduled}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('tasks').innerHTML = rows;
+    }
+
+    function renderContracts(contracts) {
+      const rows = contracts
+        .map((contract) => {
+          const deployed = contract.deployed_at
+            ? new Date(contract.deployed_at).toLocaleString()
+            : 'n/a';
+          const runtime = contract.runtime || 'native';
+          const programId = contract.program_id || '-';
+          const bytecodeState = contract.bytecode_b64
+            ? `Yes (${contract.bytecode_b64.length} chars)`
+            : 'No';
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${contract.id}</td>
+              <td class="px-4 py-2">${contract.owner}</td>
+              <td class="px-4 py-2">${contract.name || '-'}</td>
+              <td class="px-4 py-2 uppercase">${runtime}</td>
+              <td class="px-4 py-2 text-sm break-all">${programId}</td>
+              <td class="px-4 py-2 text-sm">${contract.code_hash}</td>
+              <td class="px-4 py-2">${bytecodeState}</td>
+              <td class="px-4 py-2">${deployed}</td>
+              <td class="px-4 py-2 text-sm">${escapeHtml(contract.metadata || '-')}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('contracts').innerHTML = rows;
+    }
+
+    function renderContractEvents(events) {
+      const rows = events
+        .slice(-25)
+        .reverse()
+        .map((event) => {
+          const timestamp = event.timestamp
+            ? new Date(event.timestamp).toLocaleString()
+            : 'n/a';
+          const payload = escapeHtml(
+            JSON.stringify(event.payload || {}, null, 0).slice(0, 120)
+          );
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${event.id}</td>
+              <td class="px-4 py-2">${event.contract_id}</td>
+              <td class="px-4 py-2">${event.caller}</td>
+              <td class="px-4 py-2">${event.method}</td>
+              <td class="px-4 py-2 text-sm leading-5">${event.payload_hash}<br/><span class="text-gray-400">${payload}</span></td>
+              <td class="px-4 py-2">${timestamp}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('contract-events').innerHTML = rows;
+    }
+
+    function renderTokens(tokens) {
+      const rows = tokens
+        .map((token) => {
+          const created = token.created_at
+            ? new Date(token.created_at).toLocaleString()
+            : 'n/a';
+          const contract = token.contract_id || '-';
+          const supply = typeof token.total_supply === 'number'
+            ? token.total_supply.toLocaleString()
+            : Number(token.total_supply || 0).toLocaleString();
+          return `
+            <tr class="border-b border-gray-700">
+              <td class="px-4 py-2">${token.symbol}</td>
+              <td class="px-4 py-2">${token.name}</td>
+              <td class="px-4 py-2">${token.decimals}</td>
+              <td class="px-4 py-2">${supply}</td>
+              <td class="px-4 py-2">${token.owner}</td>
+              <td class="px-4 py-2">${token.platform ? 'Yes' : 'No'}</td>
+              <td class="px-4 py-2">${contract}</td>
+              <td class="px-4 py-2">${created}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      document.getElementById('tokens').innerHTML = rows;
+    }
+
+    function renderTreasury(treasury) {
+      const cards = [
+        { label: 'AIA Balance', value: treasury.aia_balance },
+        { label: 'WORK Balance', value: treasury.work_balance },
+        { label: 'STOR Balance', value: treasury.stor_balance },
+      ];
+      const custom = treasury.custom_tokens || {};
+      Object.keys(custom)
+        .sort()
+        .forEach((symbol) => {
+          cards.push({ label: `Custom ${symbol}`, value: custom[symbol] });
+        });
+      document.getElementById('treasury').innerHTML = cards
+        .map(
+          (card) => `
+            <div class="bg-gray-800 p-4 rounded shadow">
+              <div class="text-sm uppercase text-gray-400">${card.label}</div>
+              <div class="text-2xl font-bold">${card.value}</div>
+            </div>
+          `
+        )
+        .join('');
+    }
+
+    async function refresh() {
+      try {
+        const [
+          summary,
+          blocks,
+          providers,
+          nodes,
+          tasks,
+          treasury,
+          contracts,
+          contractEvents,
+          tokens,
+        ] = await Promise.all([
+          fetchJson('/'),
+          fetchJson('/blocks'),
+          fetchJson('/providers'),
+          fetchJson('/nodes'),
+          fetchJson('/tasks'),
+          fetchJson('/treasury'),
+          fetchJson('/contracts'),
+          fetchJson('/contracts/events'),
+          fetchJson('/tokens'),
+        ]);
+        renderSummary(summary);
+        renderBlocks(blocks);
+        renderProviders(providers);
+        renderNodes(nodes);
+        renderTasks(tasks);
+        renderContracts(contracts);
+        renderContractEvents(contractEvents);
+        renderTokens(tokens);
+        renderTreasury(treasury);
+      } catch (err) {
+        console.error('Failed to refresh explorer', err);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
